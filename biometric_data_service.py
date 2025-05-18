@@ -196,9 +196,11 @@ class BiometricDataService:
         if hasattr(self.client, method_name):
             method = getattr(self.client, method_name)
             try:
+                # Use the same approach as the working script
                 result = method(date)
+                # Add detailed logging to track what data is being returned
                 if result:
-                    logger.info(f"Method {method_name} for {date} returned data: {type(result)}")
+                    logger.info(f"Method {method_name} for {date} returned data of type: {type(result)}")
                     if isinstance(result, dict):
                         logger.info(f"Dict keys: {result.keys()}")
                     elif isinstance(result, list):
@@ -208,13 +210,13 @@ class BiometricDataService:
                 return result
             except Exception as e:
                 logger.error(f"Error calling {method_name}: {e}")
-                # Attempt to re-login if there's an authentication error
-                if "authentication" in str(e).lower() or "login" in str(e).lower():
-                    logger.info("Attempting to re-login to Garmin Connect")
-                    self._login_to_garmin()
-                    # Retry once after re-login
-                    method = getattr(self.client, method_name)
+                # Simple retry once with re-login for authentication errors
+                if "authentication" in str(e).lower():
                     try:
+                        logger.info("Attempting to re-login to Garmin Connect")
+                        self._login_to_garmin()
+                        # Try again after re-login
+                        method = getattr(self.client, method_name)
                         return method(date)
                     except Exception as retry_err:
                         logger.error(f"Error on retry for {method_name}: {retry_err}")
