@@ -8,7 +8,8 @@ port="$2"
 shift 2
 cmd="$@"
 
-until PGPASSWORD=$POSTGRES_DB_PASSWORD psql -h "$host" -U "$POSTGRES_DB_USER" -p "$port" -d "$POSTGRES_DB_NAME" -c '\q'; do
+# Wait for the database server to become available
+until pg_isready -h "$host" -p "$port" -U "${POSTGRES_DB_USER}" > /dev/null 2>&1; do
   >&2 echo "Postgres is unavailable - sleeping"
   sleep 1
 done

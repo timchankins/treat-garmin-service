@@ -413,48 +413,48 @@ class BiometricDataAnalytics:
             return {}
     
     def _calculate_trend_metrics(self, daily_metrics):
-    """Calculate trend metrics from daily data"""
-    try:
-        trend_metrics = {}
+        """Calculate trend metrics from daily data"""
+        try:
+            trend_metrics = {}
 
-        # Convert to pandas DataFrame for easier analysis
-        df = pd.DataFrame.from_dict(daily_metrics, orient='index')
-        if df.empty:
+            # Convert to pandas DataFrame for easier analysis
+            df = pd.DataFrame.from_dict(daily_metrics, orient='index')
+            if df.empty:
+                return {}
+
+            # Sort by date
+            df.index = pd.to_datetime(df.index)
+            df = df.sort_index()
+
+            # Calculate trends for different metrics
+            for column in df.columns:
+                if df[column].notna().sum() >= 3:  # Need at least 3 points for trend
+                    try:
+                        # Simple linear regression for trend
+                        x = np.arange(len(df[column].dropna()))
+                        y = df[column].dropna().values
+                        slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+
+                        # Store trend information
+                        trend_metrics[f'{column}_trend'] = {
+                            'slope': slope,
+                            'r_squared': r_value**2,
+                            'p_value': p_value,
+                            'significant': p_value < 0.05
+                        }
+
+                        # Calculate percentage change
+                        if len(y) > 1 and y[0] != 0:
+                            pct_change = (y[-1] - y[0]) / y[0] * 100
+                            trend_metrics[f'{column}_pct_change'] = pct_change
+                    except:
+                        # Skip metrics that can't be analyzed
+                        pass
+
+            return trend_metrics
+        except Exception as e:
+            logger.error(f"Failed to calculate trend metrics: {e}")
             return {}
-
-        # Sort by date
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-
-        # Calculate trends for different metrics
-        for column in df.columns:
-            if df[column].notna().sum() >= 3:  # Need at least 3 points for trend
-                try:
-                    # Simple linear regression for trend
-                    x = np.arange(len(df[column].dropna()))
-                    y = df[column].dropna().values
-                    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
-
-                    # Store trend information
-                    trend_metrics[f'{column}_trend'] = {
-                        'slope': slope,
-                        'r_squared': r_value**2,
-                        'p_value': p_value,
-                        'significant': p_value < 0.05
-                    }
-
-                    # Calculate percentage change
-                    if len(y) > 1 and y[0] != 0:
-                        pct_change = (y[-1] - y[0]) / y[0] * 100
-                        trend_metrics[f'{column}_pct_change'] = pct_change
-                except:
-                    # Skip metrics that can't be analyzed
-                    pass
-
-        return trend_metrics
-    except Exception as e:
-        logger.error(f"Failed to calculate trend metrics: {e}")
-        return {}
     
     def _calculate_correlation_metrics(self, daily_metrics):
         """Calculate correlation between different metrics"""

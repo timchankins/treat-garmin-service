@@ -182,6 +182,19 @@ To use it:
 
 ## Troubleshooting
 
+For detailed troubleshooting information, see the [TROUBLESHOOTING.md](TROUBLESHOOTING.md) document.
+
+### Using Mock Data
+
+If you're having issues with the Garmin API returning empty data, or just want to test the system without connecting to Garmin:
+
+```bash
+# Start the mock data generator service
+docker-compose up -d mockdata
+```
+
+This will populate your database with realistic mock biometric data for the past 30 days.
+
 ### Common Issues
 
 #### Port 8501 Already in Use
@@ -229,14 +242,20 @@ docker-compose logs -f postgres
 docker exec -it garmin-biometric-service-timescaledb-1 psql -U postgres -c "SELECT 'Connection test';"
 ```
 
-#### Garmin API Authentication Failures
+#### Garmin API Data Issues
 
-If the service can't authenticate with Garmin:
+If the Garmin API authenticates but returns no data:
 
-1. Verify your credentials in the `.env` file
-2. Check if Garmin has implemented additional security measures
-3. Look for error logs:
+1. Check if your Garmin Connect account has data for the requested timeframe
+2. Verify that your Garmin device is properly syncing with Garmin Connect
+3. Look for warnings in the logs:
    ```bash
-   docker-compose logs -f biometric_data_service | grep -i "authentication"
+   docker-compose logs -f biometric_data_service | grep "returned no data"
    ```
+4. Use the mock data generator to test the rest of the pipeline:
+   ```bash
+   docker-compose up -d mockdata
+   ```
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more details.
 

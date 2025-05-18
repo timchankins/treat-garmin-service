@@ -1,0 +1,21 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install PostgreSQL client
+RUN apt-get update && apt-get install -y postgresql-client && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy script
+COPY generate_mock_data.py .
+COPY wait-for-db.sh .
+
+# Make scripts executable
+RUN chmod +x wait-for-db.sh
+RUN chmod +x generate_mock_data.py
+
+# Command to wait for database and then run mock data generator
+CMD ["sh", "-c", "./wait-for-db.sh postgres && ./wait-for-db.sh timescaledb && python generate_mock_data.py"]

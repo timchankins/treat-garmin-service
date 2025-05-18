@@ -119,22 +119,31 @@ class BiometricDataService:
                         raw_data JSONB,
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (id, timestamp),
-                        FOREIGN KEY (user_id) REFERENCES users(id)
+                        FOREIGN KEY (user_id) REFERENCES users(id),
+                        UNIQUE (user_id, timestamp, data_type, metric_name)
                     )
                 """)
                 
                 # Check if the table is already a hypertable to avoid errors
-                cursor.execute("""
-                    SELECT * FROM _timescaledb_catalog.hypertable 
-                    WHERE hypertable_name = 'biometric_data'
-                """)
-                is_hypertable = cursor.fetchone() is not None
+                try:
+                    cursor.execute("""
+                        SELECT * FROM _timescaledb_catalog.hypertable 
+                        WHERE table_name = 'biometric_data'
+                    """)
+                    is_hypertable = cursor.fetchone() is not None
+                except Exception as e:
+                    logger.warning(f"Failed to check if table is a hypertable: {e}")
+                    is_hypertable = False  # Assume it's not a hypertable
                 
                 if not is_hypertable:
                     # Convert to TimescaleDB hypertable
-                    cursor.execute("""
-                        SELECT create_hypertable('biometric_data', 'timestamp')
-                    """)
+                    try:
+                        cursor.execute("""
+                            SELECT create_hypertable('biometric_data', 'timestamp')
+                        """)
+                    except Exception as e:
+                        logger.warning(f"Failed to create hypertable: {e}")
+                        # Continue execution anyway
                 
                 # Create index for faster queries
                 cursor.execute("""
@@ -187,7 +196,16 @@ class BiometricDataService:
         if hasattr(self.client, method_name):
             method = getattr(self.client, method_name)
             try:
-                return method(date)
+                result = method(date)
+                if result:
+                    logger.info(f"Method {method_name} for {date} returned data: {type(result)}")
+                    if isinstance(result, dict):
+                        logger.info(f"Dict keys: {result.keys()}")
+                    elif isinstance(result, list):
+                        logger.info(f"List length: {len(result)}")
+                else:
+                    logger.warning(f"Method {method_name} for {date} returned no data (None or empty)")
+                return result
             except Exception as e:
                 logger.error(f"Error calling {method_name}: {e}")
                 # Attempt to re-login if there's an authentication error
@@ -228,6 +246,7 @@ class BiometricDataService:
         """Save data to TimescaleDB"""
         try:
             if not self.timescale_conn or self.timescale_conn.closed:
+                logger.info("Reconnecting to TimescaleDB as connection was closed")
                 self._setup_timescale_db()
                 
             with self.timescale_conn.cursor() as cursor:
@@ -238,6 +257,7 @@ class BiometricDataService:
                 if isinstance(data, dict):
                     # If it's a simple dictionary, save each key as a metric
                     flattened_data = self._flatten_data(data)
+                    logger.debug(f"Flattened data contains {len(flattened_data)} metrics")
                     for metric_name, value in flattened_data.items():
                         # Convert value to JSON if it's a complex type
                         if isinstance(value, (dict, list)):
@@ -271,24 +291,32 @@ class BiometricDataService:
                     ))
                 
                 if rows:
+                    logger.info(f"Inserting {len(rows)} rows for {data_type} data")
                     # Insert data into biometric_data table
-                    execute_values(
-                        cursor,
-                        """
-                        INSERT INTO biometric_data 
-                        (user_id, timestamp, data_type, metric_name, value, raw_data)
-                        VALUES %s
-                        ON CONFLICT (id, timestamp) DO UPDATE
-                        SET value = EXCLUDED.value, 
-                            raw_data = EXCLUDED.raw_data,
-                            created_at = CURRENT_TIMESTAMP
-                        """,
-                        rows
-                    )
+                    try:
+                        execute_values(
+                            cursor,
+                            """
+                            INSERT INTO biometric_data 
+                            (user_id, timestamp, data_type, metric_name, value, raw_data)
+                            VALUES %s
+                            ON CONFLICT (user_id, timestamp, data_type, metric_name) DO UPDATE
+                            SET value = EXCLUDED.value, 
+                                raw_data = EXCLUDED.raw_data,
+                                created_at = CURRENT_TIMESTAMP
+                            """,
+                            rows
+                        )
+                        
+                        self.timescale_conn.commit()
+                        logger.info(f"Successfully committed {len(rows)} rows for {data_type}")
+                    except Exception as insert_error:
+                        logger.error(f"Insert error for {data_type}: {insert_error}")
+                        self.timescale_conn.rollback()
+                        return False
+                else:
+                    logger.warning(f"No rows to insert for {data_type}")
                     
-                    self.timescale_conn.commit()
-                    
-                logger.info(f"Saved {data_type} data for {date}")
                 return True
         except Exception as e:
             logger.error(f"Failed to save {data_type} data: {e}")

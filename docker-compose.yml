@@ -89,6 +89,26 @@ services:
       - biometric_data_service
       - analytics_service
     restart: unless-stopped
+    
+  mockdata:
+    build:
+      context: .
+      dockerfile: Dockerfile.mockdata
+    environment:
+      - TIMESCALE_DB_HOST=timescaledb
+      - POSTGRES_DB_HOST=postgres
+      - POSTGRES_DB_PORT=5432
+      - TIMESCALE_DB_USER=${TIMESCALE_DB_USER}
+      - TIMESCALE_DB_PASSWORD=${TIMESCALE_DB_PASSWORD}
+      - TIMESCALE_DB_NAME=${TIMESCALE_DB_NAME}
+      - POSTGRES_DB_USER=${POSTGRES_DB_USER}
+      - POSTGRES_DB_PASSWORD=${POSTGRES_DB_PASSWORD}
+      - POSTGRES_DB_NAME=${POSTGRES_DB_NAME}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
 volumes:
   timescale_data:
