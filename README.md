@@ -259,3 +259,24 @@ If the Garmin API authenticates but returns no data:
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md) for more details.
 
+#### Garmin API Connectivity
+
+If the Garmin API is connecting but not retrieving data, try rebuilding the services with the updated dependencies:
+
+```bash
+# Rebuild the biometric data service with updated dependencies
+docker-compose build biometric_data_service
+
+# Restart the service
+docker-compose restart biometric_data_service
+
+# Check logs to confirm it's working properly
+docker-compose logs -f biometric_data_service
+```
+
+You can also run the test script to verify Garmin API connectivity:
+
+```bash
+python test_garmin_api.py
+```
+

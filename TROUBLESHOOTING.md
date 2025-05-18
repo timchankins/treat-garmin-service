@@ -30,7 +30,23 @@ If the Garmin Connect API returns empty data despite successful authentication, 
 
 ### Solutions
 
-#### 1. Using Mock Data for Testing
+#### 1. Update Garmin API Library
+
+The Garmin API connectivity often improves with newer versions of the `garminconnect` library:
+
+```bash
+# Check compatibility with the test script
+python test_garmin_api.py
+
+# If it shows successful API calls, rebuild the service
+docker-compose build biometric_data_service
+docker-compose restart biometric_data_service
+
+# Check logs to confirm it's working
+docker-compose logs -f biometric_data_service
+```
+
+#### 2. Using Mock Data for Testing
 
 We've added a mock data generator to help test the complete pipeline:
 
