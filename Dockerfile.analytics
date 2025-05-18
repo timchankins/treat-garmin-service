@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY biometric_data_analytics.py .
+COPY biometric_data_service.py .  # Copy to use shared utility functions if needed
+COPY .env .
+COPY wait-for-db.sh .
+RUN chmod +x wait-for-db.sh
+
+CMD ["./wait-for-db.sh", "postgres", "5432", "python", "biometric_data_analytics.py"]

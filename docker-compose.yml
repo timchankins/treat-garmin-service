@@ -1,0 +1,95 @@
+version: '3.8'
+
+services:
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    environment:
+      - POSTGRES_USER=${TIMESCALE_DB_USER}
+      - POSTGRES_PASSWORD=${TIMESCALE_DB_PASSWORD}
+      - POSTGRES_DB=${TIMESCALE_DB_NAME}
+    ports:
+      - "${TIMESCALE_DB_PORT}:5432"
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+      - ./init-timescaledb.sql:/docker-entrypoint-initdb.d/init-timescaledb.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:14
+    environment:
+      - POSTGRES_USER=${POSTGRES_DB_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_DB_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB_NAME}
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-postgres.sql:/docker-entrypoint-initdb.d/init-postgres.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  biometric_data_service:
+    build:
+      context: .
+      dockerfile: Dockerfile.biometric
+    environment:
+      - TIMESCALE_DB_HOST=timescaledb
+      - POSTGRES_DB_HOST=postgres
+      - POSTGRES_DB_PORT=5432
+      - GARMIN_EMAIL=${GARMIN_EMAIL}
+      - GARMIN_PASSWORD=${GARMIN_PASSWORD}
+      - FETCH_INTERVAL_HOURS=${FETCH_INTERVAL_HOURS}
+      - DAYS_TO_FETCH=${DAYS_TO_FETCH}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  analytics_service:
+    build:
+      context: .
+      dockerfile: Dockerfile.analytics
+    environment:
+      - TIMESCALE_DB_HOST=timescaledb
+      - POSTGRES_DB_HOST=postgres
+      - POSTGRES_DB_PORT=5432
+      - ANALYTICS_PROCESSING_INTERVAL=${ANALYTICS_PROCESSING_INTERVAL}
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  streamlit:
+    build:
+      context: .
+      dockerfile: Dockerfile.streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      - TIMESCALE_DB_HOST=timescaledb
+      - POSTGRES_DB_HOST=postgres
+      - TIMESCALE_DB_PORT=${TIMESCALE_DB_PORT}
+      - POSTGRES_DB_PORT=5432
+    depends_on:
+      - timescaledb
+      - postgres
+      - biometric_data_service
+      - analytics_service
+    restart: unless-stopped
+
+volumes:
+  timescale_data:
+  postgres_data:
