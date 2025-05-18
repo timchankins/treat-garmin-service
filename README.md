@@ -30,7 +30,7 @@ Docker provides the easiest setup experience as it handles all dependencies and 
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/treat-garmin-service.git
+   git clone https://github.com/timchankins/treat-garmin-service.git
    cd treat-garmin-service
    ```
 
@@ -58,7 +58,7 @@ If you prefer not to use Docker, you can install the services directly on your m
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/treat-garmin-service.git
+   git clone https://github.com/timchankins/treat-garmin-service.git
    cd treat-garmin-service
    ```
 
