@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS biometric_data (
     raw_data JSONB,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (id, timestamp),
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE (user_id, timestamp, data_type, metric_name)
 );
 
 -- Create TimescaleDB hypertable
