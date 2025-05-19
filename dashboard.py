@@ -85,6 +85,57 @@ if st.sidebar.button("Fetch Latest Data"):
     except Exception as e:
         st.sidebar.error(f"Error triggering data fetch: {e}")
 
+def get_detailed_metrics(data_type=None, days_back=30):
+    """Fetch pre-processed detailed metrics from PostgreSQL"""
+    try:
+        # Create SQLAlchemy engine for PostgreSQL (not TimescaleDB)
+        conn_str = f"postgresql://{os.getenv('POSTGRES_DB_USER')}:{os.getenv('POSTGRES_DB_PASSWORD')}@{os.getenv('POSTGRES_DB_HOST')}:{os.getenv('POSTGRES_DB_PORT')}/{os.getenv('POSTGRES_DB_NAME')}"
+        engine = create_engine(conn_str)
+
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
+
+        # Base query
+        query = """
+            SELECT
+                date,
+                metric_name,
+                metric_value as value
+            FROM detailed_metrics
+            WHERE date >= %s AND date <= %s
+        """
+        params = (start_date.date(), end_date.date())
+
+        # Filter by metric type if specified
+        metric_type_mapping = {
+            "steps": ["steps%", "active%"],
+            "heart_rate": ["resting_hr", "avg_hr%"],
+            "sleep": ["sleep%"],
+            "stress": ["stress%"],
+            "hrv": ["hrv%"],
+            "body_battery": ["body_battery%"],
+            "spo2": ["spo2%"],
+            "respiration": ["respiration%"]
+        }
+
+        if data_type and data_type in metric_type_mapping:
+            like_patterns = []
+            for pattern in metric_type_mapping[data_type]:
+                like_patterns.append(f"metric_name LIKE '{pattern}'")
+
+            query += " AND (" + " OR ".join(like_patterns) + ")"
+
+        query += " ORDER BY date, metric_name"
+
+        # Use SQLAlchemy to fetch data
+        df = pd.read_sql_query(query, engine, params=params)
+        return df
+    except Exception as e:
+        st.error(f"Error fetching detailed metrics: {e}")
+        # Fallback to original method if detailed metrics are not available
+        return get_biometric_data(data_type, days_back)
+
 # Function to fetch biometric data
 def get_biometric_data(data_type=None, days_back=30):
     try:
@@ -241,14 +292,14 @@ with tab1:
 
 with tab2:
     st.header("Detailed Metrics")
-    
+
     metric_types = [
-        "Steps", "Heart Rate", "Sleep", "Stress", 
+        "Steps", "Heart Rate", "Sleep", "Stress",
         "HRV", "Body Battery", "SpO2", "Respiration"
     ]
-    
+
     selected_metric = st.selectbox("Select Metric", metric_types)
-    
+
     # Map selection to data type
     data_type_mapping = {
         "Steps": "steps",
@@ -260,52 +311,61 @@ with tab2:
         "SpO2": "spo2",
         "Respiration": "respiration"
     }
-    
+
     selected_data_type = data_type_mapping[selected_metric]
-    
-    # Fetch the selected data
-    df = get_biometric_data(selected_data_type, days_back)
-    
+
+    # Fetch the selected data from detailed metrics
+    df = get_detailed_metrics(selected_data_type, days_back)
+
     if not df.empty:
         # Get unique metrics for this data type
         metrics = df['metric_name'].unique().tolist()
         if metrics:
             selected_metrics = st.multiselect(
-                "Select Specific Metrics", 
+                "Select Specific Metrics",
                 metrics,
                 default=metrics[:min(3, len(metrics))]
             )
-            
+
             if selected_metrics:
                 filtered_df = df[df['metric_name'].isin(selected_metrics)]
-                
-                # Pivot the data for better visualization
-                pivot_df = filtered_df.pivot_table(index='date', columns='metric_name', values='value', aggfunc='mean')
-                
-                # Create chart
-                fig = go.Figure()
-                
-                for metric in selected_metrics:
-                    if metric in pivot_df.columns:
-                        fig.add_trace(go.Scatter(
-                            x=pivot_df.index,
-                            y=pivot_df[metric],
-                            mode='lines+markers',
-                            name=metric
-                        ))
-                
-                fig.update_layout(
-                    title=f"{selected_metric} Metrics Over Time",
-                    xaxis_title="Date",
-                    yaxis_title="Value",
-                    legend_title="Metrics"
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Show the raw data if requested
-                if st.checkbox("Show Raw Data"):
-                    st.dataframe(filtered_df)
+
+                # Pivot the data for visualization
+                try:
+                    pivot_df = filtered_df.pivot_table(
+                        index='date',
+                        columns='metric_name',
+                        values='value',
+                        aggfunc='mean'
+                    )
+
+                    # Create chart
+                    fig = go.Figure()
+
+                    for metric in selected_metrics:
+                        if metric in pivot_df.columns:
+                            fig.add_trace(go.Scatter(
+                                x=pivot_df.index,
+                                y=pivot_df[metric],
+                                mode='lines+markers',
+                                name=metric
+                            ))
+
+                    fig.update_layout(
+                        title=f"{selected_metric} Metrics Over Time",
+                        xaxis_title="Date",
+                        yaxis_title="Value",
+                        legend_title="Metrics"
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Show the raw data if requested
+                    if st.checkbox("Show Raw Data"):
+                        st.dataframe(filtered_df)
+                except Exception as e:
+                    st.error(f"Error creating chart: {e}")
+                    st.write(filtered_df.head())
             else:
                 st.info("Please select at least one metric to display")
         else:

@@ -206,59 +206,7 @@ class BiometricDataAnalytics:
         except Exception as e:
             logger.error(f"Failed to get user data: {e}")
             return {}, None, None
-    
-    def _calculate_analytics(self, user_id):
-        """Calculate analytics for user"""
-        try:
-            # Get user data for different time ranges
-            analytics_results = []
-            
-            # Define time ranges to analyze
-            time_ranges = {
-                'week': 7,
-                'month': 30,
-                'quarter': 90
-            }
-            
-            for range_name, days_back in time_ranges.items():
-                user_data, start_date, end_date = self._get_user_data(user_id, days_back)
-                if not user_data or not start_date or not end_date:
-                    continue
-                
-                # Calculate general metrics
-                daily_metrics = self._calculate_daily_metrics(user_data)
-                
-                # Calculate averages for the period
-                avg_metrics = self._calculate_average_metrics(daily_metrics)
-                
-                # Calculate trend metrics
-                trend_metrics = self._calculate_trend_metrics(daily_metrics)
-                
-                # Calculate correlation metrics
-                correlation_metrics = self._calculate_correlation_metrics(daily_metrics)
-                
-                # Combine all metrics
-                all_metrics = {
-                    **avg_metrics,
-                    **trend_metrics,
-                    **correlation_metrics
-                }
-                
-                # Add to results
-                analytics_results.append({
-                    'user_id': user_id,
-                    'analytics_type': 'biometric',
-                    'time_range': range_name,
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'metrics': all_metrics
-                })
-            
-            return analytics_results
-        except Exception as e:
-            logger.error(f"Failed to calculate analytics: {e}")
-            return []
-    
+     
     def _calculate_daily_metrics(self, user_data):
         """Calculate daily metrics from user data"""
         try:
@@ -495,6 +443,122 @@ class BiometricDataAnalytics:
             logger.error(f"Failed to calculate correlation metrics: {e}")
             return {}
     
+        def _store_detailed_metrics(self, user_id, daily_metrics, start_date, end_date):
+        """Store detailed metrics in a structured format for efficient querying"""
+        try:
+            conn = psycopg2.connect(**self.postgres_conn_params)
+            with conn.cursor() as cursor:
+                # First, ensure we have the detailed_metrics table
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS detailed_metrics (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL,
+                        date DATE NOT NULL,
+                        metric_name VARCHAR(100) NOT NULL,
+                        metric_value FLOAT NOT NULL,
+                        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE (user_id, date, metric_name)
+                    )
+                """)
+
+                # Create index for faster queries
+                cursor.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_detailed_metrics_user_date
+                    ON detailed_metrics (user_id, date)
+                """)
+
+                # Insert the detailed metrics
+                rows = []
+                for date_str, metrics in daily_metrics.items():
+                    date_obj = datetime.datetime.fromisoformat(date_str).date()
+                    for metric_name, value in metrics.items():
+                        if value is not None:
+                            rows.append((
+                                user_id,
+                                date_obj,
+                                metric_name,
+                                float(value)
+                            ))
+
+                # Use batch insert for efficiency
+                if rows:
+                    execute_values(
+                        cursor,
+                        """
+                        INSERT INTO detailed_metrics (user_id, date, metric_name, metric_value)
+                        VALUES %s
+                        ON CONFLICT (user_id, date, metric_name)
+                        DO UPDATE SET
+                            metric_value = EXCLUDED.metric_value,
+                            created_at = CURRENT_TIMESTAMP
+                        """,
+                        rows,
+                        page_size=100
+                    )
+
+                    conn.commit()
+                    logger.info(f"Stored {len(rows)} detailed metrics for user {user_id}")
+                    return True
+
+            conn.close()
+            return False
+        except Exception as e:
+            logger.error(f"Failed to store detailed metrics: {e}")
+            if 'conn' in locals() and conn:
+                conn.rollback()
+            return False
+
+    def _calculate_analytics(self, user_id):
+        """Calculate analytics for user"""
+        try:
+            # Get user data for different time ranges
+            analytics_results = []
+
+            # Define time ranges to analyze
+            time_ranges = {
+                'week': 7,
+                'month': 30,
+                'quarter': 90
+            }
+
+            for range_name, days_back in time_ranges.items():
+                user_data, start_date, end_date = self._get_user_data(user_id, days_back)
+                if not user_data or not start_date or not end_date:
+                    continue
+
+                # Calculate general metrics
+                daily_metrics = self._calculate_daily_metrics(user_data)
+
+                # NEW: Store detailed metrics in structured format
+                self._store_detailed_metrics(user_id, daily_metrics, start_date, end_date)
+
+                # Continue with existing analytics calculations
+                avg_metrics = self._calculate_average_metrics(daily_metrics)
+                trend_metrics = self._calculate_trend_metrics(daily_metrics)
+                correlation_metrics = self._calculate_correlation_metrics(daily_metrics)
+
+                # Combine all metrics
+                all_metrics = {
+                    **avg_metrics,
+                    **trend_metrics,
+                    **correlation_metrics
+                }
+
+                # Add to results
+                analytics_results.append({
+                    'user_id': user_id,
+                    'analytics_type': 'biometric',
+                    'time_range': range_name,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'metrics': all_metrics
+                })
+
+            return analytics_results
+        except Exception as e:
+            logger.error(f"Failed to calculate analytics: {e}")
+            return []
+
     def _save_analytics_results(self, results):
         """Save analytics results to PostgreSQL"""
         try:
