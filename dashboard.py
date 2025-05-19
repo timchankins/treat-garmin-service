@@ -280,7 +280,7 @@ with tab2:
                 filtered_df = df[df['metric_name'].isin(selected_metrics)]
                 
                 # Pivot the data for better visualization
-                pivot_df = filtered_df.pivot(index='date', columns='metric_name', values='value')
+                pivot_df = filtered_df.pivot_table(index='date', columns='metric_name', values='value', aggfunc='mean')
                 
                 # Create chart
                 fig = go.Figure()
