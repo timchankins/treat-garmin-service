@@ -132,8 +132,8 @@ def get_analytics_data(time_range='week'):
             LIMIT 1
         """
 
-        # Use SQLAlchemy engine
-        df = pd.read_sql_query(query, engine, params=[time_range])
+        # Use SQLAlchemy engine with a tuple for params (note the comma creating a tuple)
+        df = pd.read_sql_query(query, engine, params=(time_range,))
         return df
     except Exception as e:
         st.error(f"Error fetching analytics data: {e}")
