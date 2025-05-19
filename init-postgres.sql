@@ -1,3 +1,17 @@
+-- Create users table
+CREATE TABLE IF NOT EXISTS users (
+    id SERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Insert initial user
+INSERT INTO users
+(email)
+VALUES
+('timcolfax@yahoo.com')
+ON CONFLICT (email) DO NOTHING;
+
 -- Analytics jobs queue
 CREATE TABLE IF NOT EXISTS analytics_jobs (
     id SERIAL PRIMARY KEY,
