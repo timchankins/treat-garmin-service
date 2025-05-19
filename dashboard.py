@@ -101,23 +101,23 @@ def get_biometric_data(data_type=None, days_back=30):
             FROM biometric_data
             WHERE timestamp >= %s
         """
-        params = [start_date]
+        params = (start_date,)  # FIXED: Now a tuple with comma
 
         if data_type:
             query += " AND data_type = %s"
-            params.append(data_type)
+            # Convert to tuple with both parameters
+            params = (start_date, data_type)
 
         query += " ORDER BY timestamp, data_type, metric_name"
 
-        # Use SQLAlchemy engine
-        df = pd.read_sql_query(query, engine, params=params)
+        # Use SQLAlchemy engine with tuple params
+        df = pd.read_sql_query(query, engine, params=params)  # FIXED: params as tuple
         return df
     except Exception as e:
         st.error(f"Error fetching biometric data: {e}")
         return pd.DataFrame()
 
 # Function to fetch analytics data
-
 def get_analytics_data(time_range='week'):
     try:
         # Create SQLAlchemy engine
@@ -132,8 +132,8 @@ def get_analytics_data(time_range='week'):
             LIMIT 1
         """
 
-        # Use SQLAlchemy engine with a tuple for params (note the comma creating a tuple)
-        df = pd.read_sql_query(query, engine, params=(time_range,))
+        # Use SQLAlchemy engine with tuple
+        df = pd.read_sql_query(query, engine, params=(time_range,))  # FIXED: tuple with comma
         return df
     except Exception as e:
         st.error(f"Error fetching analytics data: {e}")
