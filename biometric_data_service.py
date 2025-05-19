@@ -1,5 +1,6 @@
 # biometric_data_service.py
 import os
+import re
 import time
 import datetime
 import logging
@@ -13,89 +14,89 @@ from typing import Dict, Any, List
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
 logger = logging.getLogger('BiometricDataService')
 
 # Constants
 AVAILABLE_METHODS = {
-    "get_steps_data": "steps",
-    "get_stats": "stats",
-    "get_heart_rates": "heart_rate",
-    "get_hrv_data": "hrv",
-    "get_stress_data": "stress",
-    "get_sleep_data": "sleep",
-    "get_rhr_day": "resting_hr",
-    "get_respiration_data": "respiration",
-    "get_intensity_minutes_data": "intensity_minutes",
-    "get_body_battery": "body_battery",
-    "get_spo2_data": "spo2",
-    "get_max_metrics": "max_metrics",
-    "get_fitnessage_data": "fitness_age",
-    "get_floors": "floors",
-}
+        "get_steps_data": "steps",
+        "get_stats": "stats",
+        "get_heart_rates": "heart_rate",
+        "get_hrv_data": "hrv",
+        "get_stress_data": "stress",
+        "get_sleep_data": "sleep",
+        "get_rhr_day": "resting_hr",
+        "get_respiration_data": "respiration",
+        "get_intensity_minutes_data": "intensity_minutes",
+        "get_body_battery": "body_battery",
+        "get_spo2_data": "spo2",
+        "get_max_metrics": "max_metrics",
+        "get_fitnessage_data": "fitness_age",
+        "get_floors": "floors",
+        }
 
 class BiometricDataService:
     def __init__(self):
         # Load environment variables
         load_dotenv()
-        
+
         # Garmin Connect credentials
         self.email = os.getenv("GARMIN_EMAIL")
         self.password = os.getenv("GARMIN_PASSWORD")
-        
+
         # Database connection parameters
         self.timescale_conn_params = {
-            "dbname": os.getenv("TIMESCALE_DB_NAME", "biometric_data"),
-            "user": os.getenv("TIMESCALE_DB_USER", "postgres"),
-            "password": os.getenv("TIMESCALE_DB_PASSWORD", "postgres"),
-            "host": os.getenv("TIMESCALE_DB_HOST", "localhost"),
-            "port": os.getenv("TIMESCALE_DB_PORT", "5432")
-        }
-        
+                "dbname": os.getenv("TIMESCALE_DB_NAME", "biometric_data"),
+                "user": os.getenv("TIMESCALE_DB_USER", "postgres"),
+                "password": os.getenv("TIMESCALE_DB_PASSWORD", "postgres"),
+                "host": os.getenv("TIMESCALE_DB_HOST", "localhost"),
+                "port": os.getenv("TIMESCALE_DB_PORT", "5432")
+                }
+
         # PostgreSQL connection parameters for analytics results
         self.postgres_conn_params = {
-            "dbname": os.getenv("POSTGRES_DB_NAME", "analytics_data"),
-            "user": os.getenv("POSTGRES_DB_USER", "postgres"),
-            "password": os.getenv("POSTGRES_DB_PASSWORD", "postgres"),
-            "host": os.getenv("POSTGRES_DB_HOST", "localhost"),
-            "port": os.getenv("POSTGRES_DB_PORT", "5432")
-        }
-        
+                "dbname": os.getenv("POSTGRES_DB_NAME", "analytics_data"),
+                "user": os.getenv("POSTGRES_DB_USER", "postgres"),
+                "password": os.getenv("POSTGRES_DB_PASSWORD", "postgres"),
+                "host": os.getenv("POSTGRES_DB_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_DB_PORT", "5432")
+                }
+
         # Initialize Garmin client
         self.client = None
-        
+
         # Initialize database connections
         self.timescale_conn = None
-        
+
         # Set schedule parameters
         self.fetch_interval_hours = int(os.getenv("FETCH_INTERVAL_HOURS", "1"))
         self.days_to_fetch = int(os.getenv("DAYS_TO_FETCH", "7"))
-        
+
         # Initialize system
         self._initialize_system()
-        
+
     def _initialize_system(self):
         """Initialize system components and setup tables"""
         try:
             # Initialize TimescaleDB connection
             self._setup_timescale_db()
-            
+
             # Initialize Garmin client
             self._login_to_garmin()
-            
+
             logger.info("System initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize system: {e}")
             raise
-    
+
     def _setup_timescale_db(self):
         """Connect to TimescaleDB and set up necessary tables"""
         try:
             # Connect to TimescaleDB
             self.timescale_conn = psycopg2.connect(**self.timescale_conn_params)
-            
+
             # Create tables if they don't exist
             with self.timescale_conn.cursor() as cursor:
                 # Create users table
@@ -106,7 +107,7 @@ class BiometricDataService:
                         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
                     )
                 """)
-                
+
                 # Create biometric_data hypertable
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS biometric_data (
@@ -123,7 +124,7 @@ class BiometricDataService:
                         UNIQUE (user_id, timestamp, data_type, metric_name)
                     )
                 """)
-                
+
                 # Check if the table is already a hypertable to avoid errors
                 try:
                     cursor.execute("""
@@ -134,7 +135,7 @@ class BiometricDataService:
                 except Exception as e:
                     logger.warning(f"Failed to check if table is a hypertable: {e}")
                     is_hypertable = False  # Assume it's not a hypertable
-                
+
                 if not is_hypertable:
                     # Convert to TimescaleDB hypertable
                     try:
@@ -144,13 +145,13 @@ class BiometricDataService:
                     except Exception as e:
                         logger.warning(f"Failed to create hypertable: {e}")
                         # Continue execution anyway
-                
+
                 # Create index for faster queries
                 cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_biometric_user_type_time 
                     ON biometric_data (user_id, data_type, timestamp DESC)
                 """)
-                
+
                 # Ensure the current user exists
                 cursor.execute("""
                     INSERT INTO users (email) 
@@ -158,41 +159,41 @@ class BiometricDataService:
                     ON CONFLICT (email) DO NOTHING
                     RETURNING id
                 """, (self.email,))
-                
+
                 result = cursor.fetchone()
                 if result:
                     self.user_id = result[0]
                 else:
                     cursor.execute("SELECT id FROM users WHERE email = %s", (self.email,))
                     self.user_id = cursor.fetchone()[0]
-                
+
                 self.timescale_conn.commit()
-                
+
             logger.info("TimescaleDB setup complete")
         except Exception as e:
             logger.error(f"Failed to setup TimescaleDB: {e}")
             if self.timescale_conn:
                 self.timescale_conn.close()
             raise
-    
+
     def _login_to_garmin(self):
         """Login to Garmin Connect API"""
         try:
             if not self.email or not self.password:
                 raise ValueError("Missing Garmin Connect credentials")
-            
+
             self.client = Garmin(self.email, self.password)
             self.client.login()
             logger.info("Logged in to Garmin Connect")
         except Exception as e:
             logger.error(f"Failed to login to Garmin Connect: {e}")
             raise
-    
+
     def _safe_call(self, method_name, date):
         """Safely call Garmin API method"""
         if not self.client:
             self._login_to_garmin()
-            
+
         if hasattr(self.client, method_name):
             method = getattr(self.client, method_name)
             try:
@@ -224,7 +225,7 @@ class BiometricDataService:
         else:
             logger.warning(f"Method {method_name} not found in Garmin client")
             return None
-    
+
     def _flatten_data(self, data, prefix=""):
         """Flatten nested data structure for storage"""
         result = {}
@@ -243,59 +244,172 @@ class BiometricDataService:
                 else:
                     result[new_key] = item
         return result
-    
+
+    def normalize_key(key):
+        """
+        Convert camelCase to snake_case and lowercase for consistent JSON key format.
+
+        Examples:
+            heartRate -> heart_rate
+            stressLevel -> stress_level
+        """
+        # First convert camelCase to snake_case
+        s1 = re.sub('(.)([A-Z][a-z]+)', r'\1_\2', key)
+        snake_case = re.sub('([a-z0-9])([A-Z])', r'\1_\2', s1).lower()
+        return snake_case
+
+    def normalize_json_keys(obj, normalize_fn=normalize_key):
+        """
+        Recursively normalize all keys in a JSON object or array.
+
+        Args:
+            obj: The JSON object or array to normalize
+            normalize_fn: Function to normalize keys (default: normalize_key)
+
+        Returns:
+            New object with normalized keys
+        """
+        if isinstance(obj, dict):
+            return {normalize_fn(k): normalize_json_keys(v, normalize_fn) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [normalize_json_keys(item, normalize_fn) for item in obj]
+        else:
+            return obj
+
     def _save_to_timescale(self, user_id, date, data_type, data):
-        """Save data to TimescaleDB"""
+        """
+        Save data to TimescaleDB with proper time-series handling.
+        """
         try:
             if not self.timescale_conn or self.timescale_conn.closed:
                 logger.info("Reconnecting to TimescaleDB as connection was closed")
                 self._setup_timescale_db()
                 
-            with self.timescale_conn.cursor() as cursor:
-                rows = []
-                timestamp = datetime.datetime.fromisoformat(date)
+            # Skip if no data
+            if data is None:
+                logger.warning(f"No data to save for {data_type} on {date}")
+                return True
                 
-                # Handle different data structure types
-                if isinstance(data, dict):
-                    # If it's a simple dictionary, save each key as a metric
-                    flattened_data = self._flatten_data(data)
-                    logger.debug(f"Flattened data contains {len(flattened_data)} metrics")
-                    for metric_name, value in flattened_data.items():
-                        # Convert value to JSON if it's a complex type
-                        if isinstance(value, (dict, list)):
-                            json_value = json.dumps(value)
-                        else:
-                            json_value = value
-                        
-                        rows.append((
-                            user_id,
-                            timestamp,
-                            data_type,
-                            metric_name,
-                            json_value,
-                            json.dumps(data)
-                        ))
+            # Base timestamp for daily summary metrics
+            timestamp = datetime.datetime.fromisoformat(date)
+            
+            rows = []
+            
+            # Handle different data structure types
+            if isinstance(data, dict):
+                # Store the raw data
+                raw_json = json.dumps(data)
+                
+                # First, store top-level metrics
+                for key, value in data.items():
+                    if not isinstance(value, (dict, list)):
+                        # Store simple scalar values with normalized keys
+                        try:
+                            # Use camelCase as in source data
+                            key_name = key
+                            json_value = json.dumps({key_name: value})
+                            
+                            rows.append((
+                                user_id,
+                                timestamp,
+                                data_type,
+                                f"{data_type}.{key_name}",
+                                json_value,
+                                raw_json
+                            ))
+                        except Exception as e:
+                            logger.warning(f"Error serializing {key}: {e}")
+                
+                # Check for time-series data (arrays of values)
+                for key, value in data.items():
+                    if isinstance(value, list) and key.endswith(("Values", "ValuesArray")):
+                        # Process time-series data
+                        try:
+                            series_name = key.replace("ValuesArray", "").replace("Values", "")
+                            
+                            for i, entry in enumerate(value):
+                                if isinstance(entry, list) and len(entry) >= 2:
+                                    # Timestamp is typically the first element
+                                    entry_time = timestamp
+                                    try:
+                                        # Try to interpret timestamp if present
+                                        ts_value = entry[0]
+                                        if isinstance(ts_value, (int, float)) and ts_value > 1000000000000:
+                                            # Millisecond timestamp
+                                            entry_time = datetime.datetime.fromtimestamp(ts_value / 1000.0)
+                                    except:
+                                        pass
+                                    
+                                    # Store the entry data
+                                    entry_data = {"value": entry[1:] if len(entry) > 2 else entry[1]}
+                                    entry_json = json.dumps(entry_data)
+                                    
+                                    rows.append((
+                                        user_id,
+                                        entry_time,
+                                        data_type,
+                                        f"{data_type}.{series_name}",
+                                        entry_json,
+                                        raw_json
+                                    ))
+                            
+                        except Exception as e:
+                            logger.warning(f"Error processing time-series data {key}: {e}")
+            
+            elif isinstance(data, list):
+                # Store the raw data
+                raw_json = json.dumps(data)
+                
+                # Store the count
+                rows.append((
+                    user_id,
+                    timestamp,
+                    data_type,
+                    f"{data_type}.count",
+                    json.dumps({"count": len(data)}),
+                    raw_json
+                ))
+                
+                # Store each item for smaller lists
+                max_items = 250
+                if len(data) <= max_items:
+                    for i, item in enumerate(data):
+                        try:
+                            item_json = json.dumps(item)
+                            rows.append((
+                                user_id,
+                                timestamp,
+                                data_type,
+                                f"{data_type}.item_{i}",
+                                item_json,
+                                raw_json
+                            ))
+                        except Exception as e:
+                            logger.warning(f"Error serializing list item {i}: {e}")
                 else:
-                    # If it's another type, save it as a single metric
-                    # Convert to JSON string if it's a complex type
-                    if isinstance(data, (dict, list)):
-                        json_value = json.dumps(data)
-                    else:
-                        json_value = data
-                        
+                    logger.info(f"List too large, skipping individual items: {len(data)} > {max_items}")
+            
+            else:
+                # Simple scalar value
+                try:
+                    json_value = json.dumps({"value": data})
                     rows.append((
                         user_id,
                         timestamp,
                         data_type,
-                        "value",
+                        f"{data_type}.value",
                         json_value,
                         json.dumps(data) if isinstance(data, (dict, list)) else None
                     ))
-                
-                if rows:
+                except Exception as e:
+                    logger.warning(f"Error serializing scalar value: {e}")
+            
+            # Insert the rows
+            if rows:
+                with self.timescale_conn.cursor() as cursor:
                     logger.info(f"Inserting {len(rows)} rows for {data_type} data")
-                    # Insert data into biometric_data table
                     try:
+                        # Use execute_values for efficient batch insertion
                         execute_values(
                             cursor,
                             """
@@ -307,52 +421,54 @@ class BiometricDataService:
                                 raw_data = EXCLUDED.raw_data,
                                 created_at = CURRENT_TIMESTAMP
                             """,
-                            rows
+                            rows,
+                            page_size=500
                         )
                         
                         self.timescale_conn.commit()
                         logger.info(f"Successfully committed {len(rows)} rows for {data_type}")
+                        return True
                     except Exception as insert_error:
                         logger.error(f"Insert error for {data_type}: {insert_error}")
                         self.timescale_conn.rollback()
                         return False
-                else:
-                    logger.warning(f"No rows to insert for {data_type}")
-                    
+            else:
+                logger.warning(f"No rows to insert for {data_type}")
                 return True
+                
         except Exception as e:
             logger.error(f"Failed to save {data_type} data: {e}")
             if self.timescale_conn and not self.timescale_conn.closed:
                 self.timescale_conn.rollback()
             return False
-    
+
     def fetch_and_store_data(self, days_back=1):
         """Fetch data from Garmin and store in TimescaleDB"""
         try:
             today = datetime.date.today()
             date_range = [today - datetime.timedelta(days=i) for i in range(days_back)]
-            
+
             stored_data_count = 0
             for date in date_range:
                 logger.info(f"Fetching data for {date.isoformat()}")
                 date_str = date.isoformat()
-                
+
                 for method_name, data_type in AVAILABLE_METHODS.items():
                     result = self._safe_call(method_name, date)
                     if result is not None:
                         if self._save_to_timescale(self.user_id, date_str, data_type, result):
                             stored_data_count += 1
-                
+
             logger.info(f"Completed fetching and storing data. Stored {stored_data_count} data points.")
-            
+
             # Trigger analytics calculation
             self._trigger_analytics()
-            
+
             return stored_data_count
         except Exception as e:
             logger.error(f"Error in fetch_and_store_data: {e}")
             return 0
-    
+
     def _trigger_analytics(self):
         """Trigger analytics calculation"""
         try:
@@ -374,19 +490,19 @@ class BiometricDataService:
                 conn.close()
         except Exception as e:
             logger.error(f"Failed to connect to PostgreSQL: {e}")
-    
+
     def schedule_data_fetch(self):
         """Schedule regular data fetches"""
         # Schedule frequent fetch for recent data
         schedule.every(self.fetch_interval_hours).hours.do(
-            self.fetch_and_store_data, days_back=self.days_to_fetch
-        )
-        
+                self.fetch_and_store_data, days_back=self.days_to_fetch
+                )
+
         # Also fetch immediately
         self.fetch_and_store_data(days_back=self.days_to_fetch)
-        
+
         logger.info(f"Scheduled data fetch every {self.fetch_interval_hours} hours for the last {self.days_to_fetch} days")
-        
+
     def run_scheduler(self):
         """Run the scheduler loop"""
         logger.info("Starting scheduler")
