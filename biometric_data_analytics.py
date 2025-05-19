@@ -443,7 +443,7 @@ class BiometricDataAnalytics:
             logger.error(f"Failed to calculate correlation metrics: {e}")
             return {}
     
-        def _store_detailed_metrics(self, user_id, daily_metrics, start_date, end_date):
+    def _store_detailed_metrics(self, user_id, daily_metrics, start_date, end_date):
         """Store detailed metrics in a structured format for efficient querying"""
         try:
             conn = psycopg2.connect(**self.postgres_conn_params)
@@ -470,7 +470,7 @@ class BiometricDataAnalytics:
                 # Insert the detailed metrics
                 rows = []
                 for date_str, metrics in daily_metrics.items():
-                    date_obj = datetime.datetime.fromisoformat(date_str).date()
+                    date_obj = datetime.fromisoformat(date_str).date()
                     for metric_name, value in metrics.items():
                         if value is not None:
                             rows.append((
