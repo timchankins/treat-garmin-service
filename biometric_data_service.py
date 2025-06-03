@@ -66,6 +66,7 @@ class BiometricDataService:
 
         # Initialize Garmin client
         self.client = None
+        self.last_login_time = None
 
         # Initialize database connections
         self.timescale_conn = None
@@ -177,22 +178,52 @@ class BiometricDataService:
             raise
 
     def _login_to_garmin(self):
-        """Login to Garmin Connect API"""
-        try:
-            if not self.email or not self.password:
-                raise ValueError("Missing Garmin Connect credentials")
+        """Login to Garmin Connect API with exponential backoff and connection reuse"""
+        # Check if we have a recent login (within last 30 minutes)
+        if (self.client and self.last_login_time and 
+            time.time() - self.last_login_time < 1800):  # 30 minutes
+            logger.info("Reusing existing Garmin Connect session")
+            return
+            
+        max_retries = 3
+        max_delay = 120  # Maximum delay of 2 minutes
+        base_delay = 5   # Start with 5 seconds
+        
+        for attempt in range(max_retries):
+            try:
+                if not self.email or not self.password:
+                    raise ValueError("Missing Garmin Connect credentials")
 
-            self.client = Garmin(self.email, self.password)
-            self.client.login()
-            logger.info("Logged in to Garmin Connect")
-        except Exception as e:
-            logger.error(f"Failed to login to Garmin Connect: {e}")
-            raise
+                self.client = Garmin(self.email, self.password)
+                self.client.login()
+                self.last_login_time = time.time()  # Track successful login time
+                logger.info("Logged in to Garmin Connect")
+                return  # Success, exit early
+                
+            except Exception as e:
+                logger.error(f"Failed to login to Garmin Connect (attempt {attempt + 1}/{max_retries}): {e}")
+                
+                if attempt < max_retries - 1:  # Don't delay on the last attempt
+                    # Calculate exponential backoff delay with jitter
+                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    # Add jitter (±25% randomness)
+                    import random
+                    jitter = delay * 0.25 * (2 * random.random() - 1)
+                    final_delay = delay + jitter
+                    
+                    logger.info(f"Waiting {final_delay:.1f} seconds before retry...")
+                    time.sleep(final_delay)
+                else:
+                    # Final attempt failed, re-raise the exception
+                    raise
 
     def _safe_call(self, method_name, date):
-        """Safely call Garmin API method"""
+        """Safely call Garmin API method with rate limiting"""
         if not self.client:
             self._login_to_garmin()
+
+        # Add delay between API calls to respect rate limits
+        time.sleep(2)  # 2 second delay between requests
 
         if hasattr(self.client, method_name):
             method = getattr(self.client, method_name)
@@ -211,12 +242,22 @@ class BiometricDataService:
                 return result
             except Exception as e:
                 logger.error(f"Error calling {method_name}: {e}")
+                # Handle rate limiting errors
+                if "429" in str(e) or "too many requests" in str(e).lower():
+                    logger.warning("Rate limited, waiting 60 seconds before retry...")
+                    time.sleep(60)
+                    try:
+                        return method(date)
+                    except Exception as retry_err:
+                        logger.error(f"Rate limit retry failed for {method_name}: {retry_err}")
+                        return None
                 # Simple retry once with re-login for authentication errors
-                if "authentication" in str(e).lower():
+                elif "authentication" in str(e).lower():
                     try:
                         logger.info("Attempting to re-login to Garmin Connect")
                         self._login_to_garmin()
-                        # Try again after re-login
+                        # Try again after re-login with delay
+                        time.sleep(2)
                         method = getattr(self.client, method_name)
                         return method(date)
                     except Exception as retry_err:
@@ -508,7 +549,7 @@ class BiometricDataService:
         logger.info("Starting scheduler")
         while True:
             schedule.run_pending()
-            time.sleep(60)  # Check every minute
+            time.sleep(3600)  # Check every hour instead of every minute
 
 # Run the service if executed directly
 if __name__ == "__main__":

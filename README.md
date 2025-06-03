@@ -36,7 +36,7 @@ Docker provides the easiest setup experience as it handles all dependencies and 
 
 2. **Run the setup script with your Garmin credentials**:
    ```bash
-   source ./setup.zsh --garmin-email=your@email.com --garmin-password=your_password
+   source ./setup.zsh --garmin-email="$GARMIN_EMAIL" --garmin-password="$GARMIN_PASSWORD"
    ```
 
    This script will:
@@ -62,9 +62,9 @@ If you prefer not to use Docker, you can install the services directly on your m
    cd treat-garmin-service
    ```
 
-2. **Run the setup script with the local flag**:
+2. **Run the setup script with the local flag "--no-docker" **:
    ```bash
-   source ./setup.zsh --no-docker --garmin-email=your@email.com --garmin-password=your_password
+   source ./setup.zsh --no-docker --garmin-email="$GARMIN_EMAIL" --garmin-password="$GARMIN_PASSWORD"
    ```
 
    This script will:
