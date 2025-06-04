@@ -34,9 +34,16 @@ Docker provides the easiest setup experience as it handles all dependencies and 
    cd treat-garmin-service
    ```
 
-2. **Run the setup script with your Garmin credentials**:
+2. **Configure your environment variables**:
    ```bash
-   source ./setup.zsh --garmin-email="$GARMIN_EMAIL" --garmin-password="$GARMIN_PASSWORD"
+   cp .env.example .env
+   vim .env
+   ```
+   Update the `GARMIN_EMAIL` and `GARMIN_PASSWORD` values with your actual Garmin Connect credentials.
+
+3. **Run the setup script**:
+   ```bash
+   source ./setup.zsh
    ```
 
    This script will:
@@ -49,7 +56,7 @@ Docker provides the easiest setup experience as it handles all dependencies and 
      - Streamlit Dashboard
    - Start all services
 
-3. **Access the dashboard**:
+4. **Access the dashboard**:
    Once setup is complete, visit http://localhost:8501 in your browser to see the Streamlit dashboard.
 
 ### Local Installation
@@ -62,9 +69,16 @@ If you prefer not to use Docker, you can install the services directly on your m
    cd treat-garmin-service
    ```
 
-2. **Run the setup script with the local flag "--no-docker" **:
+2. **Configure your environment variables**:
    ```bash
-   source ./setup.zsh --no-docker --garmin-email="$GARMIN_EMAIL" --garmin-password="$GARMIN_PASSWORD"
+   cp .env.example .env
+   vim .env
+   ```
+   Update the `GARMIN_EMAIL` and `GARMIN_PASSWORD` values with your actual Garmin Connect credentials.
+
+3. **Run the setup script with the local flag**:
+   ```bash
+   source ./setup.zsh --no-docker
    ```
 
    This script will:
@@ -73,7 +87,7 @@ If you prefer not to use Docker, you can install the services directly on your m
    - Install and configure TimescaleDB and PostgreSQL
    - Set up necessary database tables
 
-3. **Run the services** (in separate terminal windows):
+4. **Run the services** (in separate terminal windows):
    ```bash
    # Terminal 1
    python biometric_data_service.py
@@ -85,7 +99,7 @@ If you prefer not to use Docker, you can install the services directly on your m
    streamlit run dashboard.py
    ```
 
-4. **Access the dashboard**:
+5. **Access the dashboard**:
    Visit http://localhost:8501 in your browser.
 
 ## Configuration
