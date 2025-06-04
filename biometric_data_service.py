@@ -331,10 +331,16 @@ class BiometricDataService:
                 logger.warning(f"No data to save for {data_type} on {date}")
                 return True
                 
-            # Base timestamp for daily summary metrics
-            timestamp = datetime.datetime.fromisoformat(date)
+            # Base timestamp for daily summary metrics - add timezone if not present
+            if 'T' in date and ('+' in date or 'Z' in date):
+                # Already has time and timezone info
+                timestamp = datetime.datetime.fromisoformat(date.replace('Z', '+00:00'))
+            else:
+                # Date only - add midnight time with timezone
+                timestamp = datetime.datetime.fromisoformat(f"{date}T00:00:00+00:00")
             
             rows = []
+            microsecond_offset = 0  # Track offset to ensure unique timestamps
             
             # Handle different data structure types
             if isinstance(data, dict):
@@ -350,9 +356,13 @@ class BiometricDataService:
                             key_name = key
                             json_value = json.dumps({key_name: value})
                             
+                            # Create unique timestamp for each metric to avoid conflicts
+                            unique_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                            microsecond_offset = (microsecond_offset + 1) % 1000000
+                            
                             rows.append((
                                 user_id,
-                                timestamp,
+                                unique_timestamp,
                                 data_type,
                                 f"{data_type}.{key_name}",
                                 json_value,
@@ -370,16 +380,30 @@ class BiometricDataService:
                             
                             for i, entry in enumerate(value):
                                 if isinstance(entry, list) and len(entry) >= 2:
-                                    # Timestamp is typically the first element
-                                    entry_time = timestamp
+                                    # Try to interpret timestamp if present
+                                    entry_time = None
                                     try:
-                                        # Try to interpret timestamp if present
                                         ts_value = entry[0]
-                                        if isinstance(ts_value, (int, float)) and ts_value > 1000000000000:
-                                            # Millisecond timestamp
-                                            entry_time = datetime.datetime.fromtimestamp(ts_value / 1000.0)
-                                    except:
-                                        pass
+                                        if isinstance(ts_value, (int, float)):
+                                            if ts_value > 1000000000000:
+                                                # Millisecond timestamp
+                                                entry_time = datetime.datetime.fromtimestamp(ts_value / 1000.0, tz=datetime.timezone.utc)
+                                            elif ts_value > 1000000000:
+                                                # Second timestamp
+                                                entry_time = datetime.datetime.fromtimestamp(ts_value, tz=datetime.timezone.utc)
+                                        elif isinstance(ts_value, str):
+                                            # Try parsing ISO format timestamp
+                                            try:
+                                                entry_time = datetime.datetime.fromisoformat(ts_value.replace('Z', '+00:00'))
+                                            except:
+                                                pass
+                                    except Exception as e:
+                                        logger.debug(f"Could not parse timestamp {entry[0]}: {e}")
+                                    
+                                    # Fall back to base timestamp with unique microsecond offset if no valid timestamp
+                                    if entry_time is None:
+                                        entry_time = timestamp.replace(microsecond=microsecond_offset)
+                                        microsecond_offset = (microsecond_offset + 1) % 1000000
                                     
                                     # Store the entry data
                                     entry_data = {"value": entry[1:] if len(entry) > 2 else entry[1]}
@@ -402,9 +426,11 @@ class BiometricDataService:
                 raw_json = json.dumps(data)
                 
                 # Store the count
+                count_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                microsecond_offset = (microsecond_offset + 1) % 1000000
                 rows.append((
                     user_id,
-                    timestamp,
+                    count_timestamp,
                     data_type,
                     f"{data_type}.count",
                     json.dumps({"count": len(data)}),
@@ -417,9 +443,11 @@ class BiometricDataService:
                     for i, item in enumerate(data):
                         try:
                             item_json = json.dumps(item)
+                            item_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                            microsecond_offset = (microsecond_offset + 1) % 1000000
                             rows.append((
                                 user_id,
-                                timestamp,
+                                item_timestamp,
                                 data_type,
                                 f"{data_type}.item_{i}",
                                 item_json,
@@ -434,9 +462,10 @@ class BiometricDataService:
                 # Simple scalar value
                 try:
                     json_value = json.dumps({"value": data})
+                    scalar_timestamp = timestamp.replace(microsecond=microsecond_offset)
                     rows.append((
                         user_id,
-                        timestamp,
+                        scalar_timestamp,
                         data_type,
                         f"{data_type}.value",
                         json_value,
