@@ -245,12 +245,8 @@ class BiometricDataService:
 
     def _safe_call(self, method_name, date):
         """Safely call Garmin API method with rate limiting"""
+        # If no client available, don't spam logs - this should be caught upstream
         if not self.client:
-            self._login_to_garmin()
-            
-        # If still no client after login attempt (e.g., rate limited), skip this call
-        if not self.client:
-            logger.warning(f"Skipping {method_name} call for {date} - no authenticated client available")
             return None
 
         # Add delay between API calls to respect rate limits
@@ -546,6 +542,23 @@ class BiometricDataService:
     def fetch_and_store_data(self, days_back=1):
         """Fetch data from Garmin and store in TimescaleDB"""
         try:
+            # Check if we're in rate limit cooldown before doing anything
+            if hasattr(self, 'rate_limit_time') and self.rate_limit_time:
+                time_since_rate_limit = time.time() - self.rate_limit_time
+                if time_since_rate_limit < 3700:  # 1 hour + 100 seconds buffer
+                    remaining_time = 3700 - time_since_rate_limit
+                    logger.info(f"Skipping data fetch - rate limit cooldown ({remaining_time/60:.1f} minutes remaining)")
+                    return 0
+                    
+            # Try to login if needed
+            if not self.client:
+                self._login_to_garmin()
+                
+            # If still no client after login attempt, skip this fetch cycle
+            if not self.client:
+                logger.warning("No authenticated client available - skipping data fetch")
+                return 0
+
             today = datetime.date.today()
             date_range = [today - datetime.timedelta(days=i) for i in range(days_back)]
 
@@ -562,8 +575,11 @@ class BiometricDataService:
 
             logger.info(f"Completed fetching and storing data. Stored {stored_data_count} data points.")
 
-            # Trigger analytics calculation
-            self._trigger_analytics()
+            # Only trigger analytics if we actually stored some data
+            if stored_data_count > 0:
+                self._trigger_analytics()
+            else:
+                logger.info("No new data stored - skipping analytics calculation")
 
             return stored_data_count
         except Exception as e:
