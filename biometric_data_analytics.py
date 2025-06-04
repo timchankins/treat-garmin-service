@@ -185,6 +185,7 @@ class BiometricDataAnalytics:
                 """, (user_id, start_date, end_date))
                 
                 rows = cursor.fetchall()
+                logger.info(f"Retrieved {len(rows)} raw data rows for user {user_id} ({start_date} to {end_date})")
                 
                 # Organize data by type and date
                 for row in rows:
@@ -218,8 +219,37 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    if 'steps' in metrics:
-                        daily_metrics[date]['steps'] = int(metrics['steps']) if metrics['steps'] else 0
+                    # Handle both direct steps and step intervals
+                    total_steps = 0
+                    step_count = 0
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle steps.count format
+                            if metric_name == 'steps.count' and 'count' in value_data:
+                                step_count = max(step_count, int(value_data['count']) if value_data['count'] else 0)
+                            
+                            # Handle steps.item_X format (interval data)
+                            elif metric_name.startswith('steps.item_') and 'steps' in value_data:
+                                total_steps += int(value_data['steps']) if value_data['steps'] else 0
+                            
+                            # Handle direct steps field (legacy format)
+                            elif metric_name == 'steps' and isinstance(value_data, (int, float)):
+                                step_count = max(step_count, int(value_data))
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
+                    
+                    # Use the higher value between count and aggregated intervals
+                    daily_metrics[date]['steps'] = max(step_count, total_steps)
             
             # Process heart rate data
             if 'heart_rate' in user_data:
@@ -227,23 +257,62 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    if 'restingHeartRate' in metrics:
-                        value = metrics['restingHeartRate']
-                        daily_metrics[date]['resting_hr'] = float(value) if value else None
-                    
-                    # Calculate average heart rate if available
-                    avg_hr = None
                     hr_values = []
-                    for key, value in metrics.items():
-                        if key.startswith('heartRateValues') and value is not None:
-                            try:
-                                hr_values.append(float(value))
-                            except (ValueError, TypeError):
-                                pass
                     
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various heart rate fields
+                            if 'restingHeartRate' in value_data and value_data['restingHeartRate']:
+                                daily_metrics[date]['resting_hr'] = float(value_data['restingHeartRate'])
+                            elif 'value' in value_data and value_data['value'] and metric_name.startswith('heart_rate'):
+                                hr_values.append(float(value_data['value']))
+                            elif 'avgHeartRate' in value_data and value_data['avgHeartRate']:
+                                hr_values.append(float(value_data['avgHeartRate']))
+                            elif 'heartRateValues' in value_data and value_data['heartRateValues']:
+                                if isinstance(value_data['heartRateValues'], list):
+                                    hr_values.extend([float(x) for x in value_data['heartRateValues'] if x])
+                                else:
+                                    hr_values.append(float(value_data['heartRateValues']))
+                                    
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
+                    
+                    # Calculate average heart rate
                     if hr_values:
-                        avg_hr = sum(hr_values) / len(hr_values)
-                        daily_metrics[date]['avg_hr'] = avg_hr
+                        daily_metrics[date]['avg_hr'] = sum(hr_values) / len(hr_values)
+            
+            # Process resting heart rate data separately
+            if 'resting_hr' in user_data:
+                for date, metrics in user_data['resting_hr'].items():
+                    if date not in daily_metrics:
+                        daily_metrics[date] = {}
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Look for resting heart rate values
+                            if 'value' in value_data and value_data['value']:
+                                daily_metrics[date]['resting_hr'] = float(value_data['value'])
+                            elif 'restingHeartRate' in value_data and value_data['restingHeartRate']:
+                                daily_metrics[date]['resting_hr'] = float(value_data['restingHeartRate'])
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
             
             # Process sleep data
             if 'sleep' in user_data:
@@ -251,20 +320,26 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    sleep_duration = None
-                    deep_sleep = None
-                    
-                    if 'sleepTimeSeconds' in metrics:
-                        value = metrics['sleepTimeSeconds']
-                        if value:
-                            sleep_duration = float(value) / 3600  # Convert to hours
-                            daily_metrics[date]['sleep_duration'] = sleep_duration
-                    
-                    if 'deepSleepSeconds' in metrics:
-                        value = metrics['deepSleepSeconds']
-                        if value:
-                            deep_sleep = float(value) / 3600  # Convert to hours
-                            daily_metrics[date]['deep_sleep'] = deep_sleep
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various sleep fields
+                            if 'sleepTimeSeconds' in value_data and value_data['sleepTimeSeconds']:
+                                daily_metrics[date]['sleep_duration'] = float(value_data['sleepTimeSeconds']) / 3600
+                            elif 'totalSleepTimeSeconds' in value_data and value_data['totalSleepTimeSeconds']:
+                                daily_metrics[date]['sleep_duration'] = float(value_data['totalSleepTimeSeconds']) / 3600
+                            elif 'deepSleepSeconds' in value_data and value_data['deepSleepSeconds']:
+                                daily_metrics[date]['deep_sleep'] = float(value_data['deepSleepSeconds']) / 3600
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
             
             # Process stress data
             if 'stress' in user_data:
@@ -272,9 +347,31 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    if 'avgStressLevel' in metrics:
-                        value = metrics['avgStressLevel']
-                        daily_metrics[date]['avg_stress'] = float(value) if value else None
+                    stress_values = []
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various stress fields
+                            if 'avgStressLevel' in value_data and value_data['avgStressLevel']:
+                                stress_values.append(float(value_data['avgStressLevel']))
+                            elif 'overallStressLevel' in value_data and value_data['overallStressLevel']:
+                                stress_values.append(float(value_data['overallStressLevel']))
+                            elif 'value' in value_data and value_data['value'] and metric_name.startswith('stress'):
+                                stress_values.append(float(value_data['value']))
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
+                    
+                    if stress_values:
+                        daily_metrics[date]['avg_stress'] = sum(stress_values) / len(stress_values)
             
             # Process HRV data
             if 'hrv' in user_data:
@@ -282,9 +379,29 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    if 'avgHRV' in metrics:
-                        value = metrics['avgHRV']
-                        daily_metrics[date]['avg_hrv'] = float(value) if value else None
+                    hrv_values = []
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various HRV fields
+                            if 'avgHRV' in value_data and value_data['avgHRV']:
+                                hrv_values.append(float(value_data['avgHRV']))
+                            elif 'value' in value_data and value_data['value'] and metric_name.startswith('hrv'):
+                                hrv_values.append(float(value_data['value']))
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
+                    
+                    if hrv_values:
+                        daily_metrics[date]['avg_hrv'] = sum(hrv_values) / len(hrv_values)
             
             # Process body battery data
             if 'body_battery' in user_data:
@@ -293,16 +410,28 @@ class BiometricDataAnalytics:
                         daily_metrics[date] = {}
                     
                     battery_values = []
-                    for key, value in metrics.items():
-                        if key.startswith('bodyBatteryValue') and value is not None:
-                            try:
-                                battery_values.append(float(value))
-                            except (ValueError, TypeError):
-                                pass
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various body battery fields
+                            if 'bodyBatteryValue' in value_data and value_data['bodyBatteryValue']:
+                                battery_values.append(float(value_data['bodyBatteryValue']))
+                            elif 'value' in value_data and value_data['value'] and metric_name.startswith('body_battery'):
+                                battery_values.append(float(value_data['value']))
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
                     
                     if battery_values:
-                        avg_battery = sum(battery_values) / len(battery_values)
-                        daily_metrics[date]['avg_body_battery'] = avg_battery
+                        daily_metrics[date]['avg_body_battery'] = sum(battery_values) / len(battery_values)
             
             # Process SPO2 data
             if 'spo2' in user_data:
@@ -311,16 +440,30 @@ class BiometricDataAnalytics:
                         daily_metrics[date] = {}
                     
                     spo2_values = []
-                    for key, value in metrics.items():
-                        if key.startswith('avgSpo2') and value is not None:
-                            try:
-                                spo2_values.append(float(value))
-                            except (ValueError, TypeError):
-                                pass
+                    
+                    for metric_name, value in metrics.items():
+                        try:
+                            # Parse JSON value if it's a string
+                            if isinstance(value, str):
+                                value_data = json.loads(value)
+                            elif isinstance(value, dict):
+                                value_data = value
+                            else:
+                                continue
+                            
+                            # Handle various SPO2 fields
+                            if 'avgSpo2' in value_data and value_data['avgSpo2']:
+                                spo2_values.append(float(value_data['avgSpo2']))
+                            elif 'value' in value_data and value_data['value'] and metric_name.startswith('spo2'):
+                                spo2_values.append(float(value_data['value']))
+                                
+                        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                            continue
                     
                     if spo2_values:
-                        avg_spo2 = sum(spo2_values) / len(spo2_values)
-                        daily_metrics[date]['avg_spo2'] = avg_spo2
+                        daily_metrics[date]['avg_spo2'] = sum(spo2_values) / len(spo2_values)
+            
+            logger.info(f"Calculated daily metrics for {len(daily_metrics)} dates")
             
             return daily_metrics
         except Exception as e:
@@ -385,16 +528,16 @@ class BiometricDataAnalytics:
 
                         # Store trend information
                         trend_metrics[f'{column}_trend'] = {
-                            'slope': slope,
-                            'r_squared': r_value**2,
-                            'p_value': p_value,
-                            'significant': p_value < 0.05
+                            'slope': float(slope),
+                            'r_squared': float(r_value**2),
+                            'p_value': float(p_value),
+                            'significant': bool(p_value < 0.05)
                         }
 
                         # Calculate percentage change
                         if len(y) > 1 and y[0] != 0:
                             pct_change = (y[-1] - y[0]) / y[0] * 100
-                            trend_metrics[f'{column}_pct_change'] = pct_change
+                            trend_metrics[f'{column}_pct_change'] = float(pct_change)
                     except:
                         # Skip metrics that can't be analyzed
                         pass
@@ -417,8 +560,15 @@ class BiometricDataAnalytics:
             # Calculate correlation matrix
             corr_matrix = df.corr(method='pearson', min_periods=3)
             
-            # Convert to dictionary format
-            correlation_metrics['correlations'] = corr_matrix.to_dict()
+            # Convert to dictionary format with proper JSON serialization
+            correlations_dict = {}
+            for col1 in corr_matrix.columns:
+                correlations_dict[col1] = {}
+                for col2 in corr_matrix.columns:
+                    val = corr_matrix.loc[col1, col2]
+                    correlations_dict[col1][col2] = float(val) if not np.isnan(val) else None
+            
+            correlation_metrics['correlations'] = correlations_dict
             
             # Extract important correlations
             important_correlations = []
@@ -432,7 +582,7 @@ class BiometricDataAnalytics:
                         important_correlations.append({
                             'metric1': col1,
                             'metric2': col2,
-                            'correlation': corr_value,
+                            'correlation': float(corr_value),
                             'strength': 'strong' if abs(corr_value) > 0.7 else 'moderate'
                         })
             
@@ -523,11 +673,14 @@ class BiometricDataAnalytics:
 
             for range_name, days_back in time_ranges.items():
                 user_data, start_date, end_date = self._get_user_data(user_id, days_back)
+                logger.info(f"Retrieved data for {range_name}: {len(user_data)} data types, date range: {start_date} to {end_date}")
                 if not user_data or not start_date or not end_date:
+                    logger.warning(f"No data found for {range_name} range")
                     continue
 
                 # Calculate general metrics
                 daily_metrics = self._calculate_daily_metrics(user_data)
+                logger.info(f"Calculated daily metrics for {range_name}: {len(daily_metrics)} days")
 
                 # NEW: Store detailed metrics in structured format
                 self._store_detailed_metrics(user_id, daily_metrics, start_date, end_date)

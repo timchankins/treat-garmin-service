@@ -86,55 +86,8 @@ if st.sidebar.button("Fetch Latest Data"):
         st.sidebar.error(f"Error triggering data fetch: {e}")
 
 def get_detailed_metrics(data_type=None, days_back=30):
-    """Fetch pre-processed detailed metrics from PostgreSQL"""
-    try:
-        # Create SQLAlchemy engine for PostgreSQL (not TimescaleDB)
-        conn_str = f"postgresql://{os.getenv('POSTGRES_DB_USER')}:{os.getenv('POSTGRES_DB_PASSWORD')}@{os.getenv('POSTGRES_DB_HOST')}:{os.getenv('POSTGRES_DB_PORT')}/{os.getenv('POSTGRES_DB_NAME')}"
-        engine = create_engine(conn_str)
-
-        # Calculate date range
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
-
-        # Base query
-        query = """
-            SELECT
-                date,
-                metric_name,
-                metric_value as value
-            FROM detailed_metrics
-            WHERE date >= %s AND date <= %s
-        """
-        params = (start_date.date(), end_date.date())
-
-        # Filter by metric type if specified
-        metric_type_mapping = {
-            "steps": ["steps%", "active%"],
-            "heart_rate": ["resting_hr", "avg_hr%"],
-            "sleep": ["sleep%"],
-            "stress": ["stress%"],
-            "hrv": ["hrv%"],
-            "body_battery": ["body_battery%"],
-            "spo2": ["spo2%"],
-            "respiration": ["respiration%"]
-        }
-
-        if data_type and data_type in metric_type_mapping:
-            like_patterns = []
-            for pattern in metric_type_mapping[data_type]:
-                like_patterns.append(f"metric_name LIKE '{pattern}'")
-
-            query += " AND (" + " OR ".join(like_patterns) + ")"
-
-        query += " ORDER BY date, metric_name"
-
-        # Use SQLAlchemy to fetch data
-        df = pd.read_sql_query(query, engine, params=params)
-        return df
-    except Exception as e:
-        st.error(f"Error fetching detailed metrics: {e}")
-        # Fallback to original method if detailed metrics are not available
-        return get_biometric_data(data_type, days_back)
+    """Fetch and process biometric data for detailed metrics"""
+    return get_biometric_data(data_type, days_back)
 
 # Function to fetch biometric data
 def get_biometric_data(data_type=None, days_back=30):
@@ -142,6 +95,10 @@ def get_biometric_data(data_type=None, days_back=30):
         # Create SQLAlchemy engine
         conn_str = f"postgresql://{os.getenv('TIMESCALE_DB_USER')}:{os.getenv('TIMESCALE_DB_PASSWORD')}@{os.getenv('TIMESCALE_DB_HOST')}:{os.getenv('TIMESCALE_DB_PORT')}/{os.getenv('TIMESCALE_DB_NAME')}"
         engine = create_engine(conn_str)
+
+        # Calculate date range
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days_back)
 
         query = """
             SELECT
@@ -152,21 +109,121 @@ def get_biometric_data(data_type=None, days_back=30):
             FROM biometric_data
             WHERE timestamp >= %s
         """
-        params = (start_date,)  # FIXED: Now a tuple with comma
+        params = (start_date,)
 
         if data_type:
             query += " AND data_type = %s"
-            # Convert to tuple with both parameters
             params = (start_date, data_type)
 
         query += " ORDER BY timestamp, data_type, metric_name"
 
         # Use SQLAlchemy engine with tuple params
-        df = pd.read_sql_query(query, engine, params=params)  # FIXED: params as tuple
+        df = pd.read_sql_query(query, engine, params=params)
+        
+        # Process the data based on data type
+        if not df.empty:
+            df = process_biometric_data(df, data_type)
+        
         return df
     except Exception as e:
         st.error(f"Error fetching biometric data: {e}")
         return pd.DataFrame()
+
+def process_biometric_data(df, data_type):
+    """Process the raw biometric data to extract meaningful metrics"""
+    import json
+    
+    processed_rows = []
+    
+    for _, row in df.iterrows():
+        try:
+            value_json = json.loads(row['value']) if isinstance(row['value'], str) else row['value']
+            
+            if data_type == 'steps':
+                if row['metric_name'] == 'steps.count' and 'count' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'steps',
+                        'value': value_json['count']
+                    })
+                elif row['metric_name'].startswith('steps.item_') and 'steps' in value_json:
+                    # For individual step intervals, we'll aggregate them daily
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'step_intervals',
+                        'value': value_json['steps']
+                    })
+            
+            elif data_type == 'resting_hr':
+                if 'value' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'restingHeartRate',
+                        'value': value_json['value']
+                    })
+            
+            elif data_type == 'sleep':
+                if 'sleepTimeSeconds' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'sleepTimeSeconds',
+                        'value': value_json['sleepTimeSeconds']
+                    })
+                elif 'totalSleepTimeSeconds' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'sleepTimeSeconds',
+                        'value': value_json['totalSleepTimeSeconds']
+                    })
+            
+            elif data_type == 'stress':
+                if 'overallStressLevel' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'stress_level',
+                        'value': value_json['overallStressLevel']
+                    })
+                elif 'avgStressLevel' in value_json:
+                    processed_rows.append({
+                        'date': row['date'],
+                        'metric_name': 'stress_level',
+                        'value': value_json['avgStressLevel']
+                    })
+        
+        except (json.JSONDecodeError, KeyError, TypeError):
+            # Keep original row if processing fails
+            processed_rows.append({
+                'date': row['date'],
+                'metric_name': row['metric_name'],
+                'value': row['value']
+            })
+    
+    if processed_rows:
+        processed_df = pd.DataFrame(processed_rows)
+        
+        # Aggregate step intervals by day if needed
+        if data_type == 'steps' and 'step_intervals' in processed_df['metric_name'].values:
+            daily_steps = processed_df[processed_df['metric_name'] == 'step_intervals'].groupby('date')['value'].sum().reset_index()
+            daily_steps['metric_name'] = 'steps'
+            
+            # Combine with step counts
+            step_counts = processed_df[processed_df['metric_name'] == 'steps']
+            if not step_counts.empty:
+                # Use the higher value between count and aggregated intervals
+                all_steps = pd.concat([step_counts, daily_steps]).groupby('date')['value'].max().reset_index()
+                all_steps['metric_name'] = 'steps'
+                
+                # Replace step data with processed data
+                other_data = processed_df[processed_df['metric_name'] != 'step_intervals']
+                other_data = other_data[other_data['metric_name'] != 'steps']
+                processed_df = pd.concat([other_data, all_steps], ignore_index=True)
+            else:
+                processed_df = processed_df[processed_df['metric_name'] != 'step_intervals']
+                processed_df.loc[processed_df['metric_name'] == 'step_intervals', 'metric_name'] = 'steps'
+        
+        return processed_df
+    
+    return df
 
 # Function to fetch analytics data
 def get_analytics_data(time_range='week'):
