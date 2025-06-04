@@ -504,7 +504,7 @@ EOL
   
   # Start containers
   echo -e "${BLUE}Starting containers...${NC}"
-  ${DOCKER_COMPOSE_CMD} up -d
+  ${DOCKER_COMPOSE_CMD} up -d --build
 
   # Check if all containers are running
   sleep 5
