@@ -39,12 +39,21 @@ AVAILABLE_METHODS = {
 
 class BiometricDataService:
     def __init__(self):
-        # Load environment variables
-        load_dotenv()
+        # Load environment variables (only if not already set, to prefer Docker env vars)
+        load_dotenv(override=False)
 
         # Garmin Connect credentials
         self.email = os.getenv("GARMIN_EMAIL")
         self.password = os.getenv("GARMIN_PASSWORD")
+        
+        # Debug logging for credentials (without exposing the actual values)
+        logger.info(f"Garmin email configured: {'Yes' if self.email else 'No'}")
+        logger.info(f"Garmin password configured: {'Yes' if self.password else 'No'}")
+        
+        if not self.email or not self.password:
+            logger.error("Missing Garmin credentials! Check GARMIN_EMAIL and GARMIN_PASSWORD environment variables.")
+            logger.error(f"GARMIN_EMAIL: {'Set' if self.email else 'Not set'}")
+            logger.error(f"GARMIN_PASSWORD: {'Set' if self.password else 'Not set'}")
 
         # Database connection parameters
         self.timescale_conn_params = {
@@ -185,9 +194,17 @@ class BiometricDataService:
             logger.info("Reusing existing Garmin Connect session")
             return
             
-        max_retries = 3
-        max_delay = 120  # Maximum delay of 2 minutes
-        base_delay = 5   # Start with 5 seconds
+        # Check if we're in a rate limit cooldown period (1 hour)
+        if hasattr(self, 'rate_limit_time') and self.rate_limit_time:
+            time_since_rate_limit = time.time() - self.rate_limit_time
+            if time_since_rate_limit < 3700:  # 1 hour + 100 seconds buffer
+                remaining_time = 3700 - time_since_rate_limit
+                logger.warning(f"Still in rate limit cooldown. {remaining_time/60:.1f} minutes remaining.")
+                self.client = None
+                return
+                
+        max_retries = 2  # Reduce retries to avoid triggering rate limit
+        base_delay = 60   # Start with 1 minute delays
         
         for attempt in range(max_retries):
             try:
@@ -196,31 +213,45 @@ class BiometricDataService:
 
                 self.client = Garmin(self.email, self.password)
                 self.client.login()
-                self.last_login_time = time.time()  # Track successful login time
-                logger.info("Logged in to Garmin Connect")
+                self.last_login_time = time.time()
+                # Clear any previous rate limit time on successful login
+                self.rate_limit_time = None
+                logger.info("Successfully logged in to Garmin Connect")
                 return  # Success, exit early
                 
             except Exception as e:
                 logger.error(f"Failed to login to Garmin Connect (attempt {attempt + 1}/{max_retries}): {e}")
                 
-                if attempt < max_retries - 1:  # Don't delay on the last attempt
-                    # Calculate exponential backoff delay with jitter
-                    delay = min(base_delay * (2 ** attempt), max_delay)
-                    # Add jitter (±25% randomness)
-                    import random
-                    jitter = delay * 0.25 * (2 * random.random() - 1)
-                    final_delay = delay + jitter
-                    
-                    logger.info(f"Waiting {final_delay:.1f} seconds before retry...")
-                    time.sleep(final_delay)
+                # Check if it's a rate limit error (429)
+                is_rate_limit = "429" in str(e) or "Too Many Requests" in str(e)
+                
+                if is_rate_limit:
+                    # Record when we hit the rate limit
+                    self.rate_limit_time = time.time()
+                    logger.error("RATE LIMIT HIT! Garmin imposes 1-hour login restriction.")
+                    logger.error("Service will continue running but won't attempt login for 1 hour.")
+                    self.client = None
+                    return  # Don't retry, don't crash - just wait it out
+                
+                if attempt < max_retries - 1:  # Don't delay on the last attempt for non-rate-limit errors
+                    delay = base_delay * (attempt + 1)
+                    logger.info(f"Waiting {delay} seconds before retry...")
+                    time.sleep(delay)
                 else:
-                    # Final attempt failed, re-raise the exception
-                    raise
+                    # Final attempt failed for non-rate-limit errors
+                    logger.error("All login attempts failed. Service will continue and retry later.")
+                    self.client = None
+                    return  # Don't crash the service
 
     def _safe_call(self, method_name, date):
         """Safely call Garmin API method with rate limiting"""
         if not self.client:
             self._login_to_garmin()
+            
+        # If still no client after login attempt (e.g., rate limited), skip this call
+        if not self.client:
+            logger.warning(f"Skipping {method_name} call for {date} - no authenticated client available")
+            return None
 
         # Add delay between API calls to respect rate limits
         time.sleep(2)  # 2 second delay between requests
