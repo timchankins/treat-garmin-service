@@ -5,10 +5,10 @@ import plotly.express as px
 import plotly.graph_objects as go
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from sqlalchemy import create_engine
 from dotenv import load_dotenv
 import os
 from datetime import datetime, timedelta
+from db_utils import db_manager, get_biometric_data, get_analytics_data
 
 # Load environment variables
 load_dotenv()
@@ -30,9 +30,7 @@ postgres_conn_params = {
     "port": os.getenv("POSTGRES_DB_PORT", "5432")
 }
 
-# Create SQLAlchemy connection strings
-timescale_conn_str = f"postgresql://{timescale_conn_params['user']}:{timescale_conn_params['password']}@{timescale_conn_params['host']}:{timescale_conn_params['port']}/{timescale_conn_params['dbname']}"
-postgres_conn_str = f"postgresql://{postgres_conn_params['user']}:{postgres_conn_params['password']}@{postgres_conn_params['host']}:{postgres_conn_params['port']}/{postgres_conn_params['dbname']}"
+# Database connections now handled by db_utils module
 
 # Set up the Streamlit page
 st.set_page_config(
@@ -87,43 +85,18 @@ if st.sidebar.button("Fetch Latest Data"):
 
 def get_detailed_metrics(data_type=None, days_back=30):
     """Fetch and process biometric data for detailed metrics"""
-    return get_biometric_data(data_type, days_back)
+    df = get_biometric_data(data_type, days_back)
+    if not df.empty:
+        df = process_biometric_data(df, data_type)
+    return df
 
-# Function to fetch biometric data
-def get_biometric_data(data_type=None, days_back=30):
+# Legacy function - now redirects to db_utils
+def get_biometric_data_legacy(data_type=None, days_back=30):
+    """Legacy function for compatibility - use db_utils.get_biometric_data instead"""
     try:
-        # Create SQLAlchemy engine
-        conn_str = f"postgresql://{os.getenv('TIMESCALE_DB_USER')}:{os.getenv('TIMESCALE_DB_PASSWORD')}@{os.getenv('TIMESCALE_DB_HOST')}:{os.getenv('TIMESCALE_DB_PORT')}/{os.getenv('TIMESCALE_DB_NAME')}"
-        engine = create_engine(conn_str)
-
-        # Calculate date range
-        end_date = datetime.now()
-        start_date = end_date - timedelta(days=days_back)
-
-        query = """
-            SELECT
-                timestamp::date as date,
-                data_type,
-                metric_name,
-                value
-            FROM biometric_data
-            WHERE timestamp >= %s
-        """
-        params = (start_date,)
-
-        if data_type:
-            query += " AND data_type = %s"
-            params = (start_date, data_type)
-
-        query += " ORDER BY timestamp, data_type, metric_name"
-
-        # Use SQLAlchemy engine with tuple params
-        df = pd.read_sql_query(query, engine, params=params)
-        
-        # Process the data based on data type
+        df = get_biometric_data(data_type, days_back)
         if not df.empty:
             df = process_biometric_data(df, data_type)
-        
         return df
     except Exception as e:
         st.error(f"Error fetching biometric data: {e}")
@@ -137,66 +110,109 @@ def process_biometric_data(df, data_type):
     
     for _, row in df.iterrows():
         try:
-            value_json = json.loads(row['value']) if isinstance(row['value'], str) else row['value']
+            # Parse JSON value if it's a string, otherwise use as-is
+            if isinstance(row['value'], str):
+                try:
+                    value_json = json.loads(row['value'])
+                except json.JSONDecodeError:
+                    # If it's not valid JSON, treat as string value
+                    value_json = {"value": row['value']}
+            else:
+                value_json = row['value'] if isinstance(row['value'], dict) else {"value": row['value']}
             
+            # Process based on data type and extract numeric values
             if data_type == 'steps':
                 if row['metric_name'] == 'steps.count' and 'count' in value_json:
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'steps',
-                        'value': value_json['count']
+                        'value': float(value_json['count'])
                     })
                 elif row['metric_name'].startswith('steps.item_') and 'steps' in value_json:
-                    # For individual step intervals, we'll aggregate them daily
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'step_intervals',
-                        'value': value_json['steps']
+                        'value': float(value_json['steps'])
                     })
             
-            elif data_type == 'resting_hr':
+            elif data_type == 'heart_rate' or data_type == 'resting_hr':
                 if 'value' in value_json:
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'restingHeartRate',
-                        'value': value_json['value']
+                        'value': float(value_json['value'])
                     })
             
             elif data_type == 'sleep':
-                if 'sleepTimeSeconds' in value_json:
-                    processed_rows.append({
-                        'date': row['date'],
-                        'metric_name': 'sleepTimeSeconds',
-                        'value': value_json['sleepTimeSeconds']
-                    })
-                elif 'totalSleepTimeSeconds' in value_json:
-                    processed_rows.append({
-                        'date': row['date'],
-                        'metric_name': 'sleepTimeSeconds',
-                        'value': value_json['totalSleepTimeSeconds']
-                    })
+                # Handle various sleep metrics and extract numeric values
+                for key, val in value_json.items():
+                    if key in ['sleepTimeSeconds', 'totalSleepTimeSeconds']:
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'sleepTimeSeconds',
+                            'value': float(val)
+                        })
+                    elif key in ['avgOvernightHrv']:
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'avgOvernightHrv',
+                            'value': float(val)
+                        })
+                    elif key in ['bodyBatteryChange']:
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'bodyBatteryChange',
+                            'value': float(val)
+                        })
+                    elif key in ['hrvStatus']:
+                        # Convert status to numeric (for aggregation)
+                        status_map = {'POOR': 1, 'LOW': 2, 'UNBALANCED': 3, 'BALANCED': 4, 'HIGH': 5}
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'hrvStatus',
+                            'value': float(status_map.get(val, 3))  # Default to 3 (UNBALANCED)
+                        })
             
             elif data_type == 'stress':
                 if 'overallStressLevel' in value_json:
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'stress_level',
-                        'value': value_json['overallStressLevel']
+                        'value': float(value_json['overallStressLevel'])
                     })
                 elif 'avgStressLevel' in value_json:
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'stress_level',
-                        'value': value_json['avgStressLevel']
+                        'value': float(value_json['avgStressLevel'])
                     })
+            
+            else:
+                # For other data types, try to extract any numeric values
+                for key, val in value_json.items():
+                    try:
+                        numeric_val = float(val)
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': f"{row['metric_name']}.{key}",
+                            'value': numeric_val
+                        })
+                    except (ValueError, TypeError):
+                        # Skip non-numeric values for aggregation
+                        pass
         
-        except (json.JSONDecodeError, KeyError, TypeError):
-            # Keep original row if processing fails
-            processed_rows.append({
-                'date': row['date'],
-                'metric_name': row['metric_name'],
-                'value': row['value']
-            })
+        except (KeyError, TypeError, ValueError) as e:
+            # If all processing fails, try to extract a simple numeric value
+            try:
+                simple_value = float(row['value'])
+                processed_rows.append({
+                    'date': row['date'],
+                    'metric_name': row['metric_name'],
+                    'value': simple_value
+                })
+            except (ValueError, TypeError):
+                # Skip non-numeric values that can't be processed
+                pass
     
     if processed_rows:
         processed_df = pd.DataFrame(processed_rows)
@@ -225,24 +241,11 @@ def process_biometric_data(df, data_type):
     
     return df
 
-# Function to fetch analytics data
-def get_analytics_data(time_range='week'):
+# Legacy function - now redirects to db_utils
+def get_analytics_data_legacy(time_range='week'):
+    """Legacy function for compatibility - use db_utils.get_analytics_data instead"""
     try:
-        # Create SQLAlchemy engine
-        conn_str = f"postgresql://{os.getenv('POSTGRES_DB_USER')}:{os.getenv('POSTGRES_DB_PASSWORD')}@{os.getenv('POSTGRES_DB_HOST')}:{os.getenv('POSTGRES_DB_PORT')}/{os.getenv('POSTGRES_DB_NAME')}"
-        engine = create_engine(conn_str)
-
-        query = """
-            SELECT *
-            FROM user_analytics
-            WHERE time_range = %s
-            ORDER BY created_at DESC
-            LIMIT 1
-        """
-
-        # Use SQLAlchemy engine with tuple
-        df = pd.read_sql_query(query, engine, params=(time_range,))  # FIXED: tuple with comma
-        return df
+        return get_analytics_data(time_range)
     except Exception as e:
         st.error(f"Error fetching analytics data: {e}")
         return pd.DataFrame()
@@ -299,9 +302,9 @@ with tab1:
                 st.metric("No Data", "Run analytics")
     
     # Fetch recent data for charts
-    steps_df = get_biometric_data('steps', days_back)
-    hr_df = get_biometric_data('heart_rate', days_back)
-    sleep_df = get_biometric_data('sleep', days_back)
+    steps_df = get_detailed_metrics('steps', days_back)
+    hr_df = get_detailed_metrics('heart_rate', days_back)
+    sleep_df = get_detailed_metrics('sleep', days_back)
     
     # Create main charts
     if not steps_df.empty:
@@ -389,40 +392,53 @@ with tab2:
 
                 # Pivot the data for visualization
                 try:
-                    pivot_df = filtered_df.pivot_table(
-                        index='date',
-                        columns='metric_name',
-                        values='value',
-                        aggfunc='mean'
-                    )
+                    # Ensure all values are numeric for aggregation
+                    filtered_df = filtered_df.copy()
+                    filtered_df['value'] = pd.to_numeric(filtered_df['value'], errors='coerce')
+                    
+                    # Remove rows with NaN values (non-numeric data)
+                    filtered_df = filtered_df.dropna(subset=['value'])
+                    
+                    if filtered_df.empty:
+                        st.warning(f"No numeric data available for {selected_metric}")
+                        st.info("Raw data preview:")
+                        st.write(df.head())
+                    else:
+                        pivot_df = filtered_df.pivot_table(
+                            index='date',
+                            columns='metric_name',
+                            values='value',
+                            aggfunc='mean'
+                        )
 
-                    # Create chart
-                    fig = go.Figure()
+                        # Create chart
+                        fig = go.Figure()
 
-                    for metric in selected_metrics:
-                        if metric in pivot_df.columns:
-                            fig.add_trace(go.Scatter(
-                                x=pivot_df.index,
-                                y=pivot_df[metric],
-                                mode='lines+markers',
-                                name=metric
-                            ))
+                        for metric in selected_metrics:
+                            if metric in pivot_df.columns:
+                                fig.add_trace(go.Scatter(
+                                    x=pivot_df.index,
+                                    y=pivot_df[metric],
+                                    mode='lines+markers',
+                                    name=metric
+                                ))
 
-                    fig.update_layout(
-                        title=f"{selected_metric} Metrics Over Time",
-                        xaxis_title="Date",
-                        yaxis_title="Value",
-                        legend_title="Metrics"
-                    )
+                        fig.update_layout(
+                            title=f"{selected_metric} Metrics Over Time",
+                            xaxis_title="Date",
+                            yaxis_title="Value",
+                            legend_title="Metrics"
+                        )
 
-                    st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True)
 
-                    # Show the raw data if requested
-                    if st.checkbox("Show Raw Data"):
-                        st.dataframe(filtered_df)
+                        # Show the raw data if requested
+                        if st.checkbox("Show Raw Data"):
+                            st.dataframe(filtered_df)
                 except Exception as e:
                     st.error(f"Error creating chart: {e}")
-                    st.write(filtered_df.head())
+                    st.write("Raw data preview:")
+                    st.write(df.head())
             else:
                 st.info("Please select at least one metric to display")
         else:
