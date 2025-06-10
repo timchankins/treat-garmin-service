@@ -63,23 +63,48 @@ start_date = end_date - timedelta(days=days_back)
 # Trigger data fetch
 if st.sidebar.button("Fetch Latest Data"):
     st.sidebar.info("Triggering data fetch from Garmin Connect...")
-    # This would ideally call your data service API
     try:
-        # Connect to PostgreSQL
-        conn = psycopg2.connect(**postgres_conn_params)
-        with conn.cursor() as cursor:
+        # Connect to TimescaleDB to create a trigger for the biometric service
+        timescale_conn = psycopg2.connect(**timescale_conn_params)
+        with timescale_conn.cursor() as cursor:
+            # Create a fetch trigger table if it doesn't exist
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fetch_triggers (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER,
+                    requested_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    status VARCHAR(20) DEFAULT 'pending',
+                    days_back INTEGER DEFAULT 7
+                )
+            """)
+            
             # Get the user ID (assuming the first user)
             cursor.execute("SELECT id FROM users LIMIT 1")
-            user_id = cursor.fetchone()[0]
-            
-            # Insert a job into the analytics queue
-            cursor.execute("""
-                INSERT INTO analytics_jobs (user_id, status)
-                VALUES (%s, 'pending')
-            """, (user_id,))
-            conn.commit()
-        conn.close()
-        st.sidebar.success("Data fetch initiated! Check back in a few minutes.")
+            user_result = cursor.fetchone()
+            if user_result:
+                user_id = user_result[0]
+                
+                # Insert a fetch trigger
+                cursor.execute("""
+                    INSERT INTO fetch_triggers (user_id, days_back)
+                    VALUES (%s, %s)
+                """, (user_id, 3))  # Fetch last 3 days for immediate update
+                timescale_conn.commit()
+                
+                # Also trigger analytics after the fetch
+                postgres_conn = psycopg2.connect(**postgres_conn_params)
+                with postgres_conn.cursor() as analytics_cursor:
+                    analytics_cursor.execute("""
+                        INSERT INTO analytics_jobs (user_id, status)
+                        VALUES (%s, 'pending')
+                    """, (user_id,))
+                    postgres_conn.commit()
+                postgres_conn.close()
+                
+                st.sidebar.success("Data fetch initiated! The biometric service will process this request within a few minutes.")
+            else:
+                st.sidebar.error("No user found in the system.")
+        timescale_conn.close()
     except Exception as e:
         st.sidebar.error(f"Error triggering data fetch: {e}")
 
@@ -163,11 +188,12 @@ def process_biometric_data(df, data_type):
                     })
             
             elif data_type == 'heart_rate' or data_type == 'resting_hr':
-                if 'value' in value_json:
+                # Only process the actual resting heart rate, not continuous heart rate data
+                if row['metric_name'] == 'heart_rate.restingHeartRate' and 'restingHeartRate' in value_json:
                     processed_rows.append({
                         'date': row['date'],
                         'metric_name': 'restingHeartRate',
-                        'value': float(value_json['value'])
+                        'value': float(value_json['restingHeartRate'])
                     })
             
             elif data_type == 'sleep':
@@ -422,6 +448,8 @@ with tab1:
                     title="Resting Heart Rate",
                     labels={"value": "BPM", "date": "Date"}
                 )
+                # Set fixed Y-axis range for proper clinical context
+                rhr_chart.update_yaxes(range=[1, 100])
                 st.plotly_chart(rhr_chart, use_container_width=True)
     
     with col2:

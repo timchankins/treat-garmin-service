@@ -620,12 +620,74 @@ class BiometricDataService:
 
         logger.info(f"Scheduled data fetch every {self.fetch_interval_hours} hours for the last {self.days_to_fetch} days")
 
+    def check_fetch_triggers(self):
+        """Check for manual fetch triggers from the dashboard"""
+        try:
+            if not self.timescale_conn or self.timescale_conn.closed:
+                self._setup_timescale_db()
+                
+            with self.timescale_conn.cursor() as cursor:
+                # Check for pending fetch triggers
+                cursor.execute("""
+                    SELECT id, user_id, days_back 
+                    FROM fetch_triggers 
+                    WHERE status = 'pending' 
+                    ORDER BY requested_at ASC
+                    LIMIT 5
+                """)
+                
+                triggers = cursor.fetchall()
+                for trigger_id, user_id, days_back in triggers:
+                    logger.info(f"Processing manual fetch trigger {trigger_id} for user {user_id} (days_back: {days_back})")
+                    
+                    # Mark as processing
+                    cursor.execute("""
+                        UPDATE fetch_triggers 
+                        SET status = 'processing' 
+                        WHERE id = %s
+                    """, (trigger_id,))
+                    self.timescale_conn.commit()
+                    
+                    # Perform the fetch
+                    try:
+                        stored_count = self.fetch_and_store_data(days_back=days_back)
+                        
+                        # Mark as completed
+                        cursor.execute("""
+                            UPDATE fetch_triggers 
+                            SET status = 'completed' 
+                            WHERE id = %s
+                        """, (trigger_id,))
+                        self.timescale_conn.commit()
+                        
+                        logger.info(f"Manual fetch trigger {trigger_id} completed successfully. Stored {stored_count} data points.")
+                        
+                    except Exception as e:
+                        # Mark as failed
+                        cursor.execute("""
+                            UPDATE fetch_triggers 
+                            SET status = 'failed' 
+                            WHERE id = %s
+                        """, (trigger_id,))
+                        self.timescale_conn.commit()
+                        
+                        logger.error(f"Manual fetch trigger {trigger_id} failed: {e}")
+                        
+        except Exception as e:
+            logger.error(f"Error checking fetch triggers: {e}")
+
     def run_scheduler(self):
         """Run the scheduler loop"""
         logger.info("Starting scheduler")
         while True:
+            # Check for manual triggers more frequently
+            self.check_fetch_triggers()
+            
+            # Run scheduled jobs
             schedule.run_pending()
-            time.sleep(3600)  # Check every hour instead of every minute
+            
+            # Sleep for 5 minutes between checks (instead of 1 hour)
+            time.sleep(300)
 
 # Run the service if executed directly
 if __name__ == "__main__":
