@@ -240,6 +240,31 @@ def process_biometric_data(df, data_type):
                         'value': float(value_json['avgStressLevel'])
                     })
             
+            elif data_type == 'hrv':
+                # Handle HRV metrics and extract numeric values
+                for key, val in value_json.items():
+                    if key in ['weeklyAvg', 'lastNightAvg', 'lastNight5MinHigh', 'lastNight5MinLow']:
+                        # Extract HRV summary metrics
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': key,
+                            'value': float(val)
+                        })
+                    elif key in ['hrvValue']:
+                        # Extract individual HRV reading values
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'hrvReading',
+                            'value': float(val)
+                        })
+                    elif key in ['avgHRV', 'avg_hrv']:
+                        # Handle legacy avgHRV field
+                        processed_rows.append({
+                            'date': row['date'],
+                            'metric_name': 'avgHRV',
+                            'value': float(val)
+                        })
+            
             else:
                 # For other data types, try to extract any numeric values
                 for key, val in value_json.items():
@@ -497,6 +522,16 @@ with tab2:
     if not df.empty:
         # Get unique metrics for this data type
         metrics = df['metric_name'].unique().tolist()
+        
+        # Filter out useless metrics
+        if selected_data_type == 'hrv':
+            # Remove non-useful HRV metrics (timestamps, IDs, etc.)
+            metrics = [m for m in metrics if not any(
+                useless in m.lower() for useless in [
+                    'userprofilepk', 'userid', 'id', 'timestamp', 'gmt', 'local'
+                ]
+            )]
+        
         if metrics:
             selected_metrics = st.multiselect(
                 "Select Specific Metrics",

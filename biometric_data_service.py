@@ -398,6 +398,53 @@ class BiometricDataService:
                         except Exception as e:
                             logger.warning(f"Error serializing {key}: {e}")
                 
+                # Special handling for HRV data to extract nested HRV metrics
+                if data_type == 'hrv':
+                    hrv_fields = ['weeklyAvg', 'lastNightAvg', 'lastNight5MinHigh', 'lastNight5MinLow', 'hrvValue']
+                    
+                    # Extract HRV summary metrics
+                    if 'hrvSummary' in data and isinstance(data['hrvSummary'], dict):
+                        for field in hrv_fields:
+                            if field in data['hrvSummary'] and data['hrvSummary'][field] is not None:
+                                try:
+                                    json_value = json.dumps({field: data['hrvSummary'][field]})
+                                    unique_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                                    microsecond_offset = (microsecond_offset + 1) % 1000000
+                                    
+                                    rows.append((
+                                        user_id,
+                                        unique_timestamp,
+                                        data_type,
+                                        f"{data_type}.{field}",
+                                        json_value,
+                                        raw_json
+                                    ))
+                                    logger.info(f"Extracted HRV summary field {field}: {data['hrvSummary'][field]} from hrvSummary")
+                                except Exception as e:
+                                    logger.warning(f"Error extracting HRV summary field {field}: {e}")
+                    
+                    # Extract HRV readings if available
+                    if 'hrvReadings' in data and isinstance(data['hrvReadings'], list):
+                        for i, reading in enumerate(data['hrvReadings']):
+                            if isinstance(reading, dict) and 'hrvValue' in reading:
+                                try:
+                                    json_value = json.dumps({'hrvValue': reading['hrvValue']})
+                                    unique_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                                    microsecond_offset = (microsecond_offset + 1) % 1000000
+                                    
+                                    rows.append((
+                                        user_id,
+                                        unique_timestamp,
+                                        data_type,
+                                        f"{data_type}.hrvReading_{i}",
+                                        json_value,
+                                        raw_json
+                                    ))
+                                    if i < 3:  # Log first few readings to avoid spam
+                                        logger.info(f"Extracted HRV reading {i}: {reading['hrvValue']}")
+                                except Exception as e:
+                                    logger.warning(f"Error extracting HRV reading {i}: {e}")
+                
                 # Special handling for sleep data to extract nested sleep duration fields
                 if data_type == 'sleep':
                     sleep_duration_fields = ['sleepTimeSeconds', 'totalSleepTimeSeconds', 'deepSleepSeconds', 'napTimeSeconds']

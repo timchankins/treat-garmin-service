@@ -379,7 +379,13 @@ class BiometricDataAnalytics:
                     if date not in daily_metrics:
                         daily_metrics[date] = {}
                     
-                    hrv_values = []
+                    # Track separate HRV metrics
+                    hrv_weekly_avg = None
+                    hrv_last_night_avg = None
+                    hrv_5min_high = None
+                    hrv_5min_low = None
+                    hrv_readings = []
+                    legacy_hrv = []
                     
                     for metric_name, value in metrics.items():
                         try:
@@ -391,17 +397,50 @@ class BiometricDataAnalytics:
                             else:
                                 continue
                             
-                            # Handle various HRV fields
-                            if 'avgHRV' in value_data and value_data['avgHRV']:
-                                hrv_values.append(float(value_data['avgHRV']))
+                            # Handle specific HRV fields separately
+                            if 'weeklyAvg' in value_data and value_data['weeklyAvg']:
+                                hrv_weekly_avg = float(value_data['weeklyAvg'])
+                            elif 'lastNightAvg' in value_data and value_data['lastNightAvg']:
+                                hrv_last_night_avg = float(value_data['lastNightAvg'])
+                            elif 'lastNight5MinHigh' in value_data and value_data['lastNight5MinHigh']:
+                                hrv_5min_high = float(value_data['lastNight5MinHigh'])
+                            elif 'lastNight5MinLow' in value_data and value_data['lastNight5MinLow']:
+                                hrv_5min_low = float(value_data['lastNight5MinLow'])
+                            elif 'hrvValue' in value_data and value_data['hrvValue']:
+                                hrv_readings.append(float(value_data['hrvValue']))
+                            elif 'avgHRV' in value_data and value_data['avgHRV']:
+                                legacy_hrv.append(float(value_data['avgHRV']))
                             elif 'value' in value_data and value_data['value'] and metric_name.startswith('hrv'):
-                                hrv_values.append(float(value_data['value']))
+                                legacy_hrv.append(float(value_data['value']))
                                 
                         except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                             continue
                     
-                    if hrv_values:
-                        daily_metrics[date]['avg_hrv'] = sum(hrv_values) / len(hrv_values)
+                    # Store separate HRV metrics
+                    if hrv_weekly_avg is not None:
+                        daily_metrics[date]['hrv_weekly_avg'] = hrv_weekly_avg
+                    if hrv_last_night_avg is not None:
+                        daily_metrics[date]['hrv_last_night_avg'] = hrv_last_night_avg
+                    if hrv_5min_high is not None:
+                        daily_metrics[date]['hrv_5min_high'] = hrv_5min_high
+                    if hrv_5min_low is not None:
+                        daily_metrics[date]['hrv_5min_low'] = hrv_5min_low
+                    if hrv_readings:
+                        daily_metrics[date]['hrv_readings_avg'] = sum(hrv_readings) / len(hrv_readings)
+                    
+                    # Primary HRV metric: prioritize lastNightAvg, then fall back to other metrics
+                    primary_hrv = None
+                    if hrv_last_night_avg is not None:
+                        primary_hrv = hrv_last_night_avg
+                    elif hrv_weekly_avg is not None:
+                        primary_hrv = hrv_weekly_avg
+                    elif hrv_readings:
+                        primary_hrv = sum(hrv_readings) / len(hrv_readings)
+                    elif legacy_hrv:
+                        primary_hrv = sum(legacy_hrv) / len(legacy_hrv)
+                    
+                    if primary_hrv is not None:
+                        daily_metrics[date]['avg_hrv'] = primary_hrv
             
             # Process body battery data
             if 'body_battery' in user_data:
