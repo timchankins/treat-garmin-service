@@ -328,27 +328,27 @@ with tab1:
         
         with col1:
             if 'avg_steps' in metrics:
-                st.metric("Daily Steps", f"{int(metrics['avg_steps']):,}")
+                st.metric("Average Daily Steps", f"{int(metrics['avg_steps']):,}")
             else:
-                st.metric("Daily Steps", "No data")
+                st.metric("Average Daily Steps", "No data")
                 
         with col2:
             if 'avg_resting_hr' in metrics:
-                st.metric("Resting HR", f"{metrics['avg_resting_hr']:.1f} bpm")
+                st.metric("Average Resting HR", f"{metrics['avg_resting_hr']:.1f} bpm")
             else:
-                st.metric("Resting HR", "No data")
+                st.metric("Average Resting HR", "No data")
                 
         with col3:
             if 'avg_sleep_duration' in metrics:
-                st.metric("Sleep", f"{metrics['avg_sleep_duration']:.1f} hrs")
+                st.metric("Average Sleep", f"{metrics['avg_sleep_duration']:.1f} hrs")
             else:
-                st.metric("Sleep", "No data")
+                st.metric("Average Sleep", "No data")
                 
         with col4:
             if 'avg_avg_stress' in metrics:
-                st.metric("Stress Level", f"{metrics['avg_avg_stress']:.1f}")
+                st.metric("Average Stress Level", f"{metrics['avg_avg_stress']:.1f}")
             else:
-                st.metric("Stress Level", "No data")
+                st.metric("Average Stress Level", "No data")
     else:
         for col in [col1, col2, col3, col4]:
             with col:

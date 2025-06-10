@@ -398,6 +398,52 @@ class BiometricDataService:
                         except Exception as e:
                             logger.warning(f"Error serializing {key}: {e}")
                 
+                # Special handling for sleep data to extract nested sleep duration fields
+                if data_type == 'sleep':
+                    sleep_duration_fields = ['sleepTimeSeconds', 'totalSleepTimeSeconds', 'deepSleepSeconds', 'napTimeSeconds']
+                    
+                    # Check for sleep duration in nested objects like dailySleepDTO
+                    for key, value in data.items():
+                        if isinstance(value, dict):
+                            for field in sleep_duration_fields:
+                                if field in value and value[field] is not None:
+                                    try:
+                                        json_value = json.dumps({field: value[field]})
+                                        unique_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                                        microsecond_offset = (microsecond_offset + 1) % 1000000
+                                        
+                                        rows.append((
+                                            user_id,
+                                            unique_timestamp,
+                                            data_type,
+                                            f"{data_type}.{field}",
+                                            json_value,
+                                            raw_json
+                                        ))
+                                        logger.info(f"Extracted sleep field {field}: {value[field]} seconds from {key}")
+                                    except Exception as e:
+                                        logger.warning(f"Error extracting sleep field {field} from {key}: {e}")
+                                        
+                    # Also check if sleep duration fields are at the top level (in case structure varies)
+                    for field in sleep_duration_fields:
+                        if field in data and data[field] is not None and not isinstance(data[field], (dict, list)):
+                            try:
+                                json_value = json.dumps({field: data[field]})
+                                unique_timestamp = timestamp.replace(microsecond=microsecond_offset)
+                                microsecond_offset = (microsecond_offset + 1) % 1000000
+                                
+                                rows.append((
+                                    user_id,
+                                    unique_timestamp,
+                                    data_type,
+                                    f"{data_type}.{field}",
+                                    json_value,
+                                    raw_json
+                                ))
+                                logger.info(f"Extracted top-level sleep field {field}: {data[field]} seconds")
+                            except Exception as e:
+                                logger.warning(f"Error extracting top-level sleep field {field}: {e}")
+                
                 # Check for time-series data (arrays of values)
                 for key, value in data.items():
                     if isinstance(value, list) and key.endswith(("Values", "ValuesArray")):
