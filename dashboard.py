@@ -90,6 +90,33 @@ def get_detailed_metrics(data_type=None, days_back=30):
         df = process_biometric_data(df, data_type)
     return df
 
+def detect_partial_days(data_type, days_back=30):
+    """Detect which days have partial data based on step interval counts"""
+    if data_type != 'steps':
+        return set()
+    
+    partial_days = set()
+    
+    try:
+        # Get raw data to count step intervals per day
+        raw_df = get_biometric_data(data_type, days_back)
+        if raw_df.empty:
+            return partial_days
+            
+        # Count step intervals per day (items that represent 15-minute intervals)
+        interval_counts = raw_df[raw_df['metric_name'].str.startswith('steps.item_')].groupby('date').size()
+        
+        # A full day should have 96 intervals (24 hours * 4 intervals per hour)
+        # Consider a day partial if it has significantly fewer intervals
+        for date, count in interval_counts.items():
+            if count < 80:  # Less than ~83% of expected intervals (allowing some tolerance)
+                partial_days.add(date)
+                
+    except Exception as e:
+        st.error(f"Error detecting partial days: {e}")
+        
+    return partial_days
+
 # Legacy function - now redirects to db_utils
 def get_biometric_data_legacy(data_type=None, days_back=30):
     """Legacy function for compatibility - use db_utils.get_biometric_data instead"""
@@ -310,14 +337,76 @@ with tab1:
     if not steps_df.empty:
         steps_data = steps_df[steps_df['metric_name'] == 'steps']
         if not steps_data.empty:
-            steps_chart = px.bar(
-                steps_data, 
-                x='date', 
-                y='value',
+            # Detect partial days for enhanced visualization
+            partial_days = detect_partial_days('steps', days_back)
+            
+            # Add partial data indicator to the dataframe
+            steps_data = steps_data.copy()
+            steps_data['is_partial'] = steps_data['date'].isin(partial_days)
+            steps_data['data_status'] = steps_data['is_partial'].map({True: 'Partial Data', False: 'Complete Data'})
+            
+            # Create chart with conditional styling
+            fig = go.Figure()
+            
+            # Add complete data bars
+            complete_data = steps_data[~steps_data['is_partial']]
+            if not complete_data.empty:
+                fig.add_trace(go.Bar(
+                    x=complete_data['date'],
+                    y=complete_data['value'],
+                    name='Complete Data',
+                    marker=dict(
+                        color='#1f77b4',  # Default blue
+                        line=dict(color='#1f77b4', width=1)
+                    ),
+                    hovertemplate='<b>%{x}</b><br>Steps: %{y:,}<br>Status: Complete Data<extra></extra>'
+                ))
+            
+            # Add partial data bars with enhanced styling
+            partial_data = steps_data[steps_data['is_partial']]
+            if not partial_data.empty:
+                fig.add_trace(go.Bar(
+                    x=partial_data['date'],
+                    y=partial_data['value'],
+                    name='Partial Data',
+                    marker=dict(
+                        color='rgba(255, 165, 0, 0.6)',  # Orange with transparency
+                        line=dict(
+                            color='orange', 
+                            width=3
+                        ),
+                        pattern=dict(
+                            shape='/',  # Diagonal stripes
+                            bgcolor='rgba(255, 255, 255, 0.3)',
+                            fgcolor='orange',
+                            size=8,
+                            solidity=0.3
+                        )
+                    ),
+                    hovertemplate='<b>%{x}</b><br>Steps: %{y:,}<br>Status: <b>Partial Data</b><br><i>Data may be incomplete</i><extra></extra>'
+                ))
+            
+            fig.update_layout(
                 title="Daily Steps",
-                labels={"value": "Steps", "date": "Date"}
+                xaxis_title="Date",
+                yaxis_title="Steps",
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
             )
-            st.plotly_chart(steps_chart, use_container_width=True)
+            
+            st.plotly_chart(fig, use_container_width=True)
+            
+            # Add explanation if there are partial days
+            if partial_days:
+                st.info(f"⚠️ **Partial data detected** for {len(partial_days)} day(s). These days show orange bars with diagonal stripes and dashed borders to indicate incomplete data.")
+        else:
+            st.info("No steps data available for the selected time range.")
     
     # Heart rate and sleep charts
     col1, col2 = st.columns(2)
